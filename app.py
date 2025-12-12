@@ -113,12 +113,12 @@ payload_csv = agg_small.to_csv(index=False)
     # ================
     # Groq AI Q&A for Chart 1
     # ================
-    st.markdown("### Ask AI about this pricing chart (Groq)")
+st.markdown("### Ask AI about this pricing chart (Groq)")
 
-    user_q1 = st.text_area(
+user_q1 = st.text_area(
         "Question about pricing vs COA / grade (Chart 1)",
-        key="q_chart1",
-        placeholder="e.g. Do items with COAs seem to sell for more than those without for this product?"
+key="q_chart1",
+placeholder="e.g. Do items with COAs seem to sell for more than those without for this product?"
     )
 
     if st.button("Ask AI about Chart 1"):
