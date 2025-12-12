@@ -8,7 +8,7 @@ st.title("Revenue by Product Type")
 uploaded = st.file_uploader("Upload your CSV", type=["csv"])
 
 # Option B: fall back to a CSV committed in the repo
-data_path = "Combined_Sales_2025-2.csv"
+data_path = "Combined_Sales_2025.csv"
 
 if uploaded is not None:
     df = pd.read_csv(uploaded)
