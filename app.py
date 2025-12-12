@@ -1,13 +1,47 @@
+import os
+
 import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
+from groq import Groq
+
+
+def get_groq_client_from_key(api_key: str | None) -> Groq | None:
+    """
+    Return a Groq client if we have an API key, otherwise None.
+    Checks the explicit key from the sidebar first, then GROQ_API_KEY env var.
+    """
+    if api_key:
+        return Groq(api_key=api_key)
+
+    # fallback to environment variable if set
+    env_key = os.getenv("GROQ_API_KEY")
+    if env_key:
+        return Groq(api_key=env_key)
+
+    return None
 
 st.title("Revenue by Product Type")
 
-# Option A: upload a CSV
+st.markdown("### Groq API key (used for AI Q&A)")
+    st.caption("Stored only in this session and used to call Groq for chart insights.")
+
+    # Pre-fill from session_state so the user doesn’t have to paste it every rerun
+    default_key = st.session_state.get("groq_api_key", "")
+    groq_api_key = st.text_input(
+        "Groq API key",
+        value=default_key,
+        type="password",
+        help="Paste your Groq key here. It will be kept only in this session.",
+    )
+
+    if groq_api_key:
+        st.session_state["groq_api_key"] = groq_api_key
+
+
 uploaded = st.file_uploader("Upload your CSV", type=["csv"])
 
-# Option B: fall back to a CSV committed in the repo
+
 data_path = "Combined_Sales_2025.csv"
 
 if uploaded is not None:
