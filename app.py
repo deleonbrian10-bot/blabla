@@ -14,16 +14,15 @@ def get_groq_client_from_key(api_key: str | None) -> Groq | None:
     if api_key:
         return Groq(api_key=api_key)
 
-    # fallback to environment variable if set
     env_key = os.getenv("GROQ_API_KEY")
     if env_key:
         return Groq(api_key=env_key)
 
     return None
 
+
 st.title("Revenue by Product Type")
 
-st.markdown("### Groq API key (used for AI Q&A)")
 st.sidebar.header("Filters")
 
 # Groq API key input (hidden text)
@@ -35,7 +34,6 @@ groq_api_key = st.sidebar.text_input(
 
 uploaded = st.file_uploader("Upload your CSV", type=["csv"])
 
-
 data_path = "Combined_Sales_2025.csv"
 
 if uploaded is not None:
@@ -45,11 +43,13 @@ else:
         df = pd.read_csv(data_path)
         st.caption(f"Loaded default file: {data_path}")
     except Exception:
-        st.error("Upload a CSV, or add Combined_Sales_2025-2.csv to the repo root.")
+        st.error(f"Upload a CSV, or add {data_path} to the repo root.")
         st.stop()
-        
+
+# Net Revenue calculation
 df["Net Revenue"] = df["Price (CAD)"] - df["Discount (CAD)"]
 
+# Rename columns (if present)
 df.rename(columns={"weight": "Weight", "width": "Width", "length": "Length"}, inplace=True)
 
 # Minimal validation
@@ -59,10 +59,10 @@ if missing:
     st.error(f"Missing column(s): {', '.join(sorted(missing))}")
     st.stop()
 
-# --- your original code (almost unchanged) ---
+# --- Chart: Revenue by Product Type ---
 rev_by_type = df.groupby("Product Type")["Net Revenue"].sum().sort_values()
 
-plt.figure(figsize=(10,6))
+plt.figure(figsize=(10, 6))
 rev_by_type.plot(kind="barh", color="teal")
 plt.title("Revenue by Product Type")
 plt.xlabel("Total Net Revenue (CAD)")
@@ -71,17 +71,19 @@ plt.ylabel("Product Type")
 st.pyplot(plt.gcf())
 plt.clf()
 
-# --- aggregated table (what you send to Groq) ---
+# --- Aggregated table (what you send to Groq) ---
 agg_small = (
     df.groupby("Product Type")
-      .agg(Net_Revenue_Sum=("Net Revenue", "sum"),
-           Orders=("Net Revenue", "size"))
+      .agg(
+          Net_Revenue_Sum=("Net Revenue", "sum"),
+          Orders=("Net Revenue", "size")
+      )
       .round(2)
       .sort_values("Net_Revenue_Sum", ascending=False)
       .reset_index()
 )
 
-# --- dropdown preview: pick how many rows to preview ---
+# --- Dropdown preview: pick how many rows to preview ---
 preview_n = st.selectbox("Preview rows (aggregated table)", [5, 10, 25, 50, "All"], index=1)
 
 st.subheader("Aggregated table preview (sent to Groq)")
@@ -93,42 +95,24 @@ else:
 # --- CSV payload you send to Groq ---
 payload_csv = agg_small.to_csv(index=False)
 
-
- st.markdown("### Ask AI about this pricing chart (Groq)")
-
-    user_q1 = st.text_area(
-        "Question about pricing vs COA / grade (Chart 1)",
-        key="q_chart1",
-        placeholder="e.g. Do items with COAs seem to sell for more than those without for this product?"
-    )
-
-    if st.button("Ask AI about Chart 1"):
-        if not user_q1.strip():
-            st.info("Please enter a question before asking the AI.")
-        elif not groq_api_key:
-            st.error("Please paste your Groq API key in the sidebar first.")
-        else:
-            client = get_groq_client_from_key(groq_api_key)
-
-    # ================
-    # Groq AI Q&A for Chart 1
-    # ================
-st.markdown("### Ask AI about this pricing chart (Groq)")
+# --- Groq AI Q&A ---
+st.markdown("### Ask AI about this chart (Groq)")
 
 user_q1 = st.text_area(
-        "Question about pricing vs COA / grade (Chart 1)",
-key="q_chart1",
-placeholder="e.g. Do items with COAs seem to sell for more than those without for this product?"
-    )
+    "Question about revenue by product type (Chart 1)",
+    key="q_chart1",
+    placeholder="e.g. Which product types drive most revenue, and how concentrated is it?"
+)
 
-    if st.button("Ask AI about Chart 1"):
-        if not user_q1.strip():
-            st.info("Please enter a question before asking the AI.")
-        elif not groq_api_key:
-            st.error("Please paste your Groq API key in the sidebar first.")
+if st.button("Ask AI about Chart 1"):
+    if not user_q1.strip():
+        st.info("Please enter a question before asking the AI.")
+    else:
+        client = get_groq_client_from_key(groq_api_key)
+
+        if client is None:
+            st.error("Please paste your Groq API key in the sidebar first (or set GROQ_API_KEY).")
         else:
-            client = get_groq_client_from_key(groq_api_key)
-
             chart_description = """
 Chart 1 shows:
 - x-axis: Total Net Revenue
@@ -147,13 +131,11 @@ DATA (CSV) USED FOR THIS CHART:
 USER QUESTION:
 \"\"\"{user_q1}\"\"\"
 
-
 INSTRUCTIONS:
 - Base your answer ONLY on the CSV data above.
 - Start with 1–2 sentences that directly answer the user's question.
-- If the question asks for trends, comparisons, or explanation in detail,
-  you may add up to 5 short bullet points highlighting key patterns.
-- Keep the total answer under about 180 words (but be flexible if the question needs more nuance).
+- You may add up to 5 short bullet points highlighting key patterns.
+- Keep the total answer under about 180 words.
 - Do NOT repeat the full chart description or talk about models/APIs; focus on the data and question.
 """
 
@@ -161,14 +143,8 @@ INSTRUCTIONS:
                 resp1 = client.chat.completions.create(
                     model="llama-3.3-70b-versatile",
                     messages=[
-                        {
-                            "role": "system",
-                            "content": "You are a careful, concise data analyst.",
-                        },
-                        {
-                            "role": "user",
-                            "content": prompt1,
-                        },
+                        {"role": "system", "content": "You are a careful, concise data analyst."},
+                        {"role": "user", "content": prompt1},
                     ],
                     max_completion_tokens=300,
                     temperature=0.3,
@@ -178,4 +154,3 @@ INSTRUCTIONS:
                 st.write(answer1)
             except Exception as e:
                 st.error(f"Error calling Groq API for Chart 1: {e}")
-
