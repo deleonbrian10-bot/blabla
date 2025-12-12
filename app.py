@@ -1,9 +1,7 @@
-import os
 
 import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
-from groq import Groq
 
 
 def get_groq_client_from_key(api_key: str | None) -> Groq | None:
@@ -22,15 +20,6 @@ def get_groq_client_from_key(api_key: str | None) -> Groq | None:
 
 
 st.title("Revenue by Product Type")
-
-st.sidebar.header("Filters")
-
-# Groq API key input (hidden text)
-groq_api_key = st.sidebar.text_input(
-    "Groq API key (used for AI Q&A)",
-    type="password",
-    help="Your Groq API key starting with gsk_. This is only used locally in this session."
-)
 
 uploaded = st.file_uploader("Upload your CSV", type=["csv"])
 
@@ -95,62 +84,3 @@ else:
 # --- CSV payload you send to Groq ---
 payload_csv = agg_small.to_csv(index=False)
 
-# --- Groq AI Q&A ---
-st.markdown("### Ask AI about this chart (Groq)")
-
-user_q1 = st.text_area(
-    "Question about revenue by product type (Chart 1)",
-    key="q_chart1",
-    placeholder="e.g. Which product types drive most revenue, and how concentrated is it?"
-)
-
-if st.button("Ask AI about Chart 1"):
-    if not user_q1.strip():
-        st.info("Please enter a question before asking the AI.")
-    else:
-        client = get_groq_client_from_key(groq_api_key)
-
-        if client is None:
-            st.error("Please paste your Groq API key in the sidebar first (or set GROQ_API_KEY).")
-        else:
-            chart_description = """
-Chart 1 shows:
-- x-axis: Total Net Revenue
-- y-axis: Product Type
-"""
-
-            prompt1 = f"""
-You are a data analyst interpreting a chart in an ammolite sales dashboard.
-
-CHART CONTEXT:
-{chart_description}
-
-DATA (CSV) USED FOR THIS CHART:
-{payload_csv}
-
-USER QUESTION:
-\"\"\"{user_q1}\"\"\"
-
-INSTRUCTIONS:
-- Base your answer ONLY on the CSV data above.
-- Start with 1–2 sentences that directly answer the user's question.
-- You may add up to 5 short bullet points highlighting key patterns.
-- Keep the total answer under about 180 words.
-- Do NOT repeat the full chart description or talk about models/APIs; focus on the data and question.
-"""
-
-            try:
-                resp1 = client.chat.completions.create(
-                    model="llama-3.3-70b-versatile",
-                    messages=[
-                        {"role": "system", "content": "You are a careful, concise data analyst."},
-                        {"role": "user", "content": prompt1},
-                    ],
-                    max_completion_tokens=300,
-                    temperature=0.3,
-                )
-                answer1 = resp1.choices[0].message.content
-                st.markdown("**AI Insight (Chart 1 - Groq):**")
-                st.write(answer1)
-            except Exception as e:
-                st.error(f"Error calling Groq API for Chart 1: {e}")
