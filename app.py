@@ -45,6 +45,8 @@ plt.ylabel("Product Type")
 st.pyplot(plt.gcf())
 plt.clf()
 
+
+
 # --- Aggregated table (what you send to Groq) ---
 agg_small = (
     df.groupby("Product Type")
@@ -68,4 +70,3 @@ else:
 
 # --- CSV payload you send to Groq ---
 payload_csv = agg_small.to_csv(index=False)
-
