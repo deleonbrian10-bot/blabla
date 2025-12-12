@@ -44,29 +44,3 @@ plt.ylabel("Product Type")
 
 st.pyplot(plt.gcf())
 plt.clf()
-
-
-
-# --- Aggregated table (what you send to Groq) ---
-agg_small = (
-    df.groupby("Product Type")
-      .agg(
-          Net_Revenue_Sum=("Net Revenue", "sum"),
-          Orders=("Net Revenue", "size")
-      )
-      .round(2)
-      .sort_values("Net_Revenue_Sum", ascending=False)
-      .reset_index()
-)
-
-# --- Dropdown preview: pick how many rows to preview ---
-preview_n = st.selectbox("Preview rows (aggregated table)", [5, 10, 25, 50, "All"], index=1)
-
-st.subheader("Aggregated table preview (sent to Groq)")
-if preview_n == "All":
-    st.dataframe(agg_small, use_container_width=True)
-else:
-    st.dataframe(agg_small.head(preview_n), use_container_width=True)
-
-# --- CSV payload you send to Groq ---
-payload_csv = agg_small.to_csv(index=False)
