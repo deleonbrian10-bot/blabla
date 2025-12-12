@@ -4,21 +4,6 @@ import pandas as pd
 import matplotlib.pyplot as plt
 
 
-def get_groq_client_from_key(api_key: str | None) -> Groq | None:
-    """
-    Return a Groq client if we have an API key, otherwise None.
-    Checks the explicit key from the sidebar first, then GROQ_API_KEY env var.
-    """
-    if api_key:
-        return Groq(api_key=api_key)
-
-    env_key = os.getenv("GROQ_API_KEY")
-    if env_key:
-        return Groq(api_key=env_key)
-
-    return None
-
-
 st.title("Revenue by Product Type")
 
 uploaded = st.file_uploader("Upload your CSV", type=["csv"])
