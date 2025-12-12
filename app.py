@@ -3,7 +3,7 @@ import os
 import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
-from groq import groq
+from groq import Groq
 
 def get_groq_client_from_key(api_key: str | None) -> Groq | None:
     """
