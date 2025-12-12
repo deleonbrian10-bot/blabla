@@ -11,12 +11,6 @@ def get_groq_client_from_key(api_key: str | None) -> Groq | None:
     """
     if api_key:
         return Groq(api_key=api_key)
-
-    # fallback to environment variable if set
-    env_key = os.getenv("GROQ_API_KEY")
-    if env_key:
-        return Groq(api_key=env_key)
-
     return None
 
 
