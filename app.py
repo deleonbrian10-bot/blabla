@@ -94,3 +94,88 @@ else:
 payload_csv = agg_small.to_csv(index=False)
 
 
+ st.markdown("### Ask AI about this pricing chart (Groq)")
+
+    user_q1 = st.text_area(
+        "Question about pricing vs COA / grade (Chart 1)",
+        key="q_chart1",
+        placeholder="e.g. Do items with COAs seem to sell for more than those without for this product?"
+    )
+
+    if st.button("Ask AI about Chart 1"):
+        if not user_q1.strip():
+            st.info("Please enter a question before asking the AI.")
+        elif not groq_api_key:
+            st.error("Please paste your Groq API key in the sidebar first.")
+        else:
+            client = get_groq_client_from_key(groq_api_key)
+
+    # ================
+    # Groq AI Q&A for Chart 1
+    # ================
+    st.markdown("### Ask AI about this pricing chart (Groq)")
+
+    user_q1 = st.text_area(
+        "Question about pricing vs COA / grade (Chart 1)",
+        key="q_chart1",
+        placeholder="e.g. Do items with COAs seem to sell for more than those without for this product?"
+    )
+
+    if st.button("Ask AI about Chart 1"):
+        if not user_q1.strip():
+            st.info("Please enter a question before asking the AI.")
+        elif not groq_api_key:
+            st.error("Please paste your Groq API key in the sidebar first.")
+        else:
+            client = get_groq_client_from_key(groq_api_key)
+
+            chart_description = """
+Chart 1 shows:
+- x-axis: Total Net Revenue
+- y-axis: Product Type
+"""
+
+            prompt1 = f"""
+You are a data analyst interpreting a chart in an ammolite sales dashboard.
+
+CHART CONTEXT:
+{chart_description}
+
+DATA (CSV) USED FOR THIS CHART:
+{payload_csv}
+
+USER QUESTION:
+\"\"\"{user_q1}\"\"\"
+
+
+INSTRUCTIONS:
+- Base your answer ONLY on the CSV data above.
+- Start with 1–2 sentences that directly answer the user's question.
+- If the question asks for trends, comparisons, or explanation in detail,
+  you may add up to 5 short bullet points highlighting key patterns.
+- Keep the total answer under about 180 words (but be flexible if the question needs more nuance).
+- Do NOT repeat the full chart description or talk about models/APIs; focus on the data and question.
+"""
+
+            try:
+                resp1 = client.chat.completions.create(
+                    model="llama-3.3-70b-versatile",
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": "You are a careful, concise data analyst.",
+                        },
+                        {
+                            "role": "user",
+                            "content": prompt1,
+                        },
+                    ],
+                    max_completion_tokens=300,
+                    temperature=0.3,
+                )
+                answer1 = resp1.choices[0].message.content
+                st.markdown("**AI Insight (Chart 1 - Groq):**")
+                st.write(answer1)
+            except Exception as e:
+                st.error(f"Error calling Groq API for Chart 1: {e}")
+
