@@ -19,7 +19,6 @@ def get_groq_client_from_key(api_key: str | None) -> Groq | None:
         return Groq(api_key=env_key)
 
     return None
->>getting groq client, requests for API key (paste the key here or in the sidebar
 
 
 st.title("Revenue by Product Type")
