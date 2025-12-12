@@ -19,6 +19,10 @@ else:
     except Exception:
         st.error("Upload a CSV, or add Combined_Sales_2025-2.csv to the repo root.")
         st.stop()
+        
+df["Net Revenue"] = df["Price (CAD)"] - df["Discount (CAD)"]
+
+df.rename(columns={"weight": "Weight", "width": "Width", "length": "Length"}, inplace=True)
 
 # Minimal validation
 needed = {"Product Type", "Net Revenue"}
