@@ -24,7 +24,7 @@ def get_groq_client_from_key(api_key: str | None) -> Groq | None:
 st.title("Revenue by Product Type")
 
 st.markdown("### Groq API key (used for AI Q&A)")
-    st.caption("Stored only in this session and used to call Groq for chart insights.")
+st.caption("Stored only in this session and used to call Groq for chart insights.")
 
     # Pre-fill from session_state so the user doesn’t have to paste it every rerun
     default_key = st.session_state.get("groq_api_key", "")
