@@ -24,20 +24,14 @@ def get_groq_client_from_key(api_key: str | None) -> Groq | None:
 st.title("Revenue by Product Type")
 
 st.markdown("### Groq API key (used for AI Q&A)")
-st.caption("Stored only in this session and used to call Groq for chart insights.")
+st.sidebar.header("Filters")
 
-    # Pre-fill from session_state so the user doesn’t have to paste it every rerun
-    default_key = st.session_state.get("groq_api_key", "")
-    groq_api_key = st.text_input(
-        "Groq API key",
-        value=default_key,
-        type="password",
-        help="Paste your Groq key here. It will be kept only in this session.",
-    )
-
-    if groq_api_key:
-        st.session_state["groq_api_key"] = groq_api_key
-
+# Groq API key input (hidden text)
+groq_api_key = st.sidebar.text_input(
+    "Groq API key (used for AI Q&A)",
+    type="password",
+    help="Your Groq API key starting with gsk_. This is only used locally in this session."
+)
 
 uploaded = st.file_uploader("Upload your CSV", type=["csv"])
 
