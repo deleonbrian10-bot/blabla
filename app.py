@@ -1818,83 +1818,72 @@ with t4:
         else:
             import math
 
-            # --- Fixed 10 "nice" bins (rounded edges) ---
-            N_BINS = 10
+            def round_up(x: float, step: int) -> int:
+                return int(math.ceil(x / step) * step)
+
+            # --- Ammolite “customer-intuitive” preset (10 bins) ---
+            # 1) $0–$250
+            # 2) $251–$500
+            # 3) $501–$1,000
+            # 4) $1,001–$2,000
+            # 5) $2,001–$5,000
+            # 6) $5,001–$10,000
+            # 7) $10,001–$20,000
+            # 8) $20,001–$30,000
+            # 9) $30,001–$50,000
+            # 10) $50,001–CAP (CAP = max price rounded up to the next “nice” step)
+            edges_base = [0, 250, 500, 1000, 2000, 5000, 10000, 20000, 30000, 50000]  # 10 edges => need 1 more for cap
+            step_for_cap = 1000 if float(price_df["Price (CAD)"].max()) <= 100000 else 5000
 
             max_price = float(price_df["Price (CAD)"].max())
             if not np.isfinite(max_price) or max_price <= 0:
                 st.info("Prices are missing or non-positive; cannot build bins.")
             else:
-                raw_width = max_price / N_BINS
+                cap = round_up(max_price, step_for_cap)
+                if cap <= edges_base[-1]:
+                    cap = edges_base[-1] + step_for_cap
 
-                # Pick a "nice" bin width >= raw_width
-                # (rounded-to-hundreds/thousands-ish edges like 100, 200, 250, 500, 1000, 2000, 5000, etc.)
-                magnitude = 10 ** math.floor(math.log10(raw_width)) if raw_width > 0 else 1
-                nice_multipliers = [1, 2, 2.5, 5, 10]
-
-                bin_width = None
-                for m in nice_multipliers:
-                    cand = m * magnitude
-                    if cand >= raw_width:
-                        bin_width = cand
-                        break
-                if bin_width is None:
-                    bin_width = 10 * magnitude
-
-                # Ensure max edge covers data and is exactly 10 bins
-                max_edge = bin_width * N_BINS
-
-                # Build edges: 0 to max_edge, 10 bins
-                edges = np.linspace(0, max_edge, N_BINS + 1)
+                edges = edges_base + [cap]  # 11 edges => 10 bins
 
                 # Bin the data
                 price_df["PriceBin"] = pd.cut(
                     price_df["Price (CAD)"],
                     bins=edges,
                     include_lowest=True,
-                    right=True,
+                    right=True
                 )
 
-                # Create labels like: "$0 - $500", "$501 - $1,000", ... "$4,501 - $5,000"
+                # Labels: "$0 - $250", "$251 - $500", ..., "$50,001 - $XX,XXX"
                 labels = []
-                for i in range(N_BINS):
-                    low = edges[i]
-                    high = edges[i + 1]
+                for i in range(10):
+                    low = int(edges[i])
+                    high = int(edges[i + 1])
+                    start = low if i == 0 else (low + 1)
+                    labels.append(f"${start:,.0f} - ${high:,.0f}")
 
-                    low_i = int(round(low))
-                    high_i = int(round(high))
-
-                    # next bin starts at +1 (except first bin)
-                    start = low_i if i == 0 else (low_i + 1)
-                    labels.append(f"${start:,.0f} - ${high_i:,.0f}")
-
-                # Map Interval bins to the labels (preserve order)
+                # Map Interval bins to labels, then force all 10 bins to stay visible even if empty
                 bin_categories = price_df["PriceBin"].cat.categories
-                label_map = {
-                    bin_categories[i]: labels[i]
-                    for i in range(min(len(bin_categories), len(labels)))
-                }
-                price_df["PriceBinLabel"] = price_df["PriceBin"].map(label_map).astype(str)
+                label_map = {bin_categories[i]: labels[i] for i in range(len(bin_categories))}
+                price_df["PriceBinLabel"] = price_df["PriceBin"].map(label_map)
 
-                st.caption(
-                    f"Using 10 bins from $0 to ${max_edge:,.0f} (bin width ≈ ${bin_width:,.0f})."
+                price_df["PriceBinLabel"] = pd.Categorical(
+                    price_df["PriceBinLabel"],
+                    categories=labels,
+                    ordered=True
                 )
+
+                st.caption(f"Using Ammolite preset bins up to ${cap:,.0f} (max price ${max_price:,.0f}).")
 
                 grp = (
-                    price_df.groupby(["PriceBinLabel", "COA Status"], dropna=False)
-                    .agg(
-                        Sale_Count=(
-                            ("Sale ID" if "Sale ID" in price_df.columns else "Price (CAD)"),
-                            "count",
-                        )
-                    )
-                    .reset_index()
+                    price_df.groupby(["PriceBinLabel", "COA Status"], dropna=False, observed=False)
+                    .size()
+                    .reset_index(name="Sale_Count")
                 )
 
                 if grp.empty:
                     st.info("No price bins could be formed for Chart 4.")
                 else:
-                    ordered_labels = list(dict.fromkeys(grp["PriceBinLabel"].astype(str)))
+                    ordered_labels = labels  # <- always all 10 bins, even if empty
 
                     pivot = (
                         grp.pivot(index="PriceBinLabel", columns="COA Status", values="Sale_Count")
@@ -1923,7 +1912,7 @@ with t4:
                         fig4.add_bar(
                             x=d["PriceBinLabel"].astype(str),
                             y=d["Sale_Count"],
-                            name=status,
+                            name=status
                         )
 
                     fig4.add_trace(
@@ -1947,11 +1936,18 @@ with t4:
                             range=[0, 100],
                         ),
                         title="COA Adoption and Sales Volume by Price Bucket",
-                        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+                        legend=dict(
+                            orientation="h",
+                            yanchor="bottom",
+                            y=1.02,
+                            xanchor="left",
+                            x=0
+                        ),
                     )
 
                     fig4 = style_fig(fig4, height=560)
                     st.plotly_chart(fig4, use_container_width=True, key=pkey("comp_chart4"))
+
 
     # ======================
     # Chart 5: Shipping Delay Distribution by Compliance Group (violin)
