@@ -1698,8 +1698,6 @@ with tab_compliance:
             fig = style_fig(fig, height=520)
             st.plotly_chart(fig, use_container_width=True, key=pkey("comp_chart1"))
 
-            st.caption("Note: Plotly OLS trendlines require `statsmodels` in requirements.txt.")
-
     # ======================
     # Chart 2: COA Price Premium by Grade
     # ======================
@@ -1804,39 +1802,92 @@ with tab_compliance:
                     fig3 = style_fig(fig3, height=560)
                     st.plotly_chart(fig3, use_container_width=True, key=pkey("comp_chart3"))
 
-    # ======================
-    # Chart 4: COA Adoption by Price Bucket (stacked bars + line)
-    # ======================
-    with t4:
-        st.markdown("### Chart 4: COA Adoption by Price Bucket")
-        c_df = _apply_coa_selector(c_base, "coa_sel_chart4")
+# ======================
+# Chart 4: COA Adoption by Price Bucket (stacked bars + line)
+# ======================
+with t4:
+    st.markdown("### Chart 4: COA Adoption by Price Bucket")
+    c_df = _apply_coa_selector(c_base, "coa_sel_chart4")
 
-        if c_df.empty or "Price (CAD)" not in c_df.columns:
-            st.info("No data available for Chart 4 under current filters.")
+    if c_df.empty or "Price (CAD)" not in c_df.columns:
+        st.info("No data available for Chart 4 under current filters.")
+    else:
+        price_df = c_df.dropna(subset=["Price (CAD)"]).copy()
+        if price_df.empty:
+            st.info("No rows with valid prices remain for Chart 4.")
         else:
-            price_df = c_df.dropna(subset=["Price (CAD)"]).copy()
-            if price_df.empty:
-                st.info("No rows with valid prices remain for Chart 4.")
+            import math
+
+            # --- Fixed 10 "nice" bins (rounded edges) ---
+            N_BINS = 10
+
+            max_price = float(price_df["Price (CAD)"].max())
+            if not np.isfinite(max_price) or max_price <= 0:
+                st.info("Prices are missing or non-positive; cannot build bins.")
             else:
-                num_bins = st.slider(
-                    "Number of price bins (quantiles)",
-                    min_value=3,
-                    max_value=10,
-                    value=5,
-                    key="bins_chart4_in_comp",
-                    help="Bins use quantiles (qcut). If qcut fails, equal-width bins are used.",
+                raw_width = max_price / N_BINS
+
+                # Pick a "nice" bin width >= raw_width
+                # (rounded-to-hundreds/thousands-ish edges like 100, 200, 250, 500, 1000, 2000, 5000, etc.)
+                magnitude = 10 ** math.floor(math.log10(raw_width)) if raw_width > 0 else 1
+                nice_multipliers = [1, 2, 2.5, 5, 10]
+
+                bin_width = None
+                for m in nice_multipliers:
+                    cand = m * magnitude
+                    if cand >= raw_width:
+                        bin_width = cand
+                        break
+                if bin_width is None:
+                    bin_width = 10 * magnitude
+
+                # Ensure max edge covers data and is exactly 10 bins
+                max_edge = bin_width * N_BINS
+
+                # Build edges: 0 to max_edge, 10 bins
+                edges = np.linspace(0, max_edge, N_BINS + 1)
+
+                # Bin the data
+                price_df["PriceBin"] = pd.cut(
+                    price_df["Price (CAD)"],
+                    bins=edges,
+                    include_lowest=True,
+                    right=True,
                 )
 
-                try:
-                    price_df["PriceBin"] = pd.qcut(price_df["Price (CAD)"], q=num_bins, duplicates="drop")
-                except ValueError:
-                    price_df["PriceBin"] = pd.cut(price_df["Price (CAD)"], bins=num_bins)
+                # Create labels like: "$0 - $500", "$501 - $1,000", ... "$4,501 - $5,000"
+                labels = []
+                for i in range(N_BINS):
+                    low = edges[i]
+                    high = edges[i + 1]
 
-                price_df["PriceBinLabel"] = price_df["PriceBin"].astype(str)
+                    low_i = int(round(low))
+                    high_i = int(round(high))
+
+                    # next bin starts at +1 (except first bin)
+                    start = low_i if i == 0 else (low_i + 1)
+                    labels.append(f"${start:,.0f} - ${high_i:,.0f}")
+
+                # Map Interval bins to the labels (preserve order)
+                bin_categories = price_df["PriceBin"].cat.categories
+                label_map = {
+                    bin_categories[i]: labels[i]
+                    for i in range(min(len(bin_categories), len(labels)))
+                }
+                price_df["PriceBinLabel"] = price_df["PriceBin"].map(label_map).astype(str)
+
+                st.caption(
+                    f"Using 10 bins from $0 to ${max_edge:,.0f} (bin width ≈ ${bin_width:,.0f})."
+                )
 
                 grp = (
                     price_df.groupby(["PriceBinLabel", "COA Status"], dropna=False)
-                    .agg(Sale_Count=(("Sale ID" if "Sale ID" in price_df.columns else "Price (CAD)"), "count"))
+                    .agg(
+                        Sale_Count=(
+                            ("Sale ID" if "Sale ID" in price_df.columns else "Price (CAD)"),
+                            "count",
+                        )
+                    )
                     .reset_index()
                 )
 
@@ -1860,14 +1911,20 @@ with tab_compliance:
                     pivot["COA_Rate"] = pivot["With_COA_Count"] / pivot["Total_Count"].replace(0, pd.NA)
                     pivot = pivot.reset_index()
 
-                    grp["PriceBinLabel"] = pd.Categorical(grp["PriceBinLabel"], categories=ordered_labels, ordered=True)
+                    grp["PriceBinLabel"] = pd.Categorical(
+                        grp["PriceBinLabel"], categories=ordered_labels, ordered=True
+                    )
                     grp = grp.sort_values("PriceBinLabel")
 
                     fig4 = go.Figure()
 
                     for status in sorted(grp["COA Status"].dropna().unique()):
                         d = grp[grp["COA Status"] == status]
-                        fig4.add_bar(x=d["PriceBinLabel"].astype(str), y=d["Sale_Count"], name=status)
+                        fig4.add_bar(
+                            x=d["PriceBinLabel"].astype(str),
+                            y=d["Sale_Count"],
+                            name=status,
+                        )
 
                     fig4.add_trace(
                         go.Scatter(
