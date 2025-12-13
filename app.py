@@ -2132,6 +2132,30 @@ with t4:
                 fig7.update_layout(yaxis_tickformat=".0%")
                 fig7 = style_fig(fig7, height=560)
                 st.plotly_chart(fig7, use_container_width=True, key=pkey("comp_chart7"))
+                
+with st.expander("📌 Definitions / Insights / Recommendations", expanded=False):
+    dtab, itab, rtab = st.tabs(["Definitions", "Insights", "Recommendations"])
+
+    with dtab:
+        st.markdown("""
+        **Definitions**
+        - **With COA**: Sale has a valid `COA-######`
+        - **Without COA**: Missing or blank COA
+        - **COA Adoption (%)**: With COA / (With COA + Without COA)
+        """)
+
+    with itab:
+        st.markdown("""
+        **Insights**
+        - What you’re seeing and why it might be happening.
+        - (Optional) Add quick stats calculated from the filtered dataframe.
+        """)
+
+    with rtab:
+        st.markdown("""
+        **Recommendations**
+        - Actionable next steps based on what the chart is showing.
+        """)
 
 # -----------------------------
 # TAB: All Data
