@@ -1736,7 +1736,7 @@ with tab_compliance:
             )
             fig = style_fig(fig, height=520)
             st.plotly_chart(fig, use_container_width=True, key=pkey("comp_chart1"))
-            st.caption("Note: Plotly OLS trendlines require `statsmodels` in requirements.txt.")
+         
 
         # DIR expander
         total_rows = int(len(c_df))
