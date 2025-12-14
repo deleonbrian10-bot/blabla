@@ -4133,7 +4133,7 @@ This heatmap shows which product types are best campaign opportunities during **
                 )
 
 # -----------------------------
-# TAB: Compliance (with DIR expanders + metric tiles for all 7 charts)
+# TAB: Compliance (DIR expanders + metric tiles) — Chart 1 & 3 removed
 # -----------------------------
 with tab_compliance:
     st.subheader("Compliance – COA & Export Permits")
@@ -4185,7 +4185,7 @@ with tab_compliance:
     else:
         c_base["Days_to_Ship"] = np.nan
 
-    # ProdGrade helper
+    # ProdGrade helper (still used by hover, and some metrics if you add later)
     pt = c_base["Product Type"].fillna("Unknown Product").astype(str) if "Product Type" in c_base.columns else "Unknown Product"
     gr = c_base["Grade"].fillna("Unknown Grade").astype(str) if "Grade" in c_base.columns else "Unknown Grade"
     c_base["ProdGrade"] = pt + " | " + gr
@@ -4257,100 +4257,25 @@ with tab_compliance:
             with rtab:
                 st.markdown(recommendations_md)
 
-    # -----------------------------
-    # Sub-tabs (one per chart)
-    # -----------------------------
-    t1, t2, t3, t4, t5, t6, t7 = st.tabs(
+    t2, t4, t5, t6, t7 = st.tabs(
         [
-            "Chart 1 – Price vs Date",
-            "Chart 2 – COA Premium by Grade",
-            "Chart 3 – Shipping by Country & Grade",
-            "Chart 4 – COA Adoption by Price Bucket",
-            "Chart 5 – Shipping Delay vs Compliance",
-            "Chart 6 – Compliance Score vs Order Value",
-            "Chart 7 – COA Coverage by Product Type",
+            "COA Premium by Grade",
+            "COA Adoption by Price Bucket",
+            "Shipping Delay Distribution",
+            "Compliance Score vs Order Value",
+            "COA Coverage by Product Type",
         ]
     )
 
     # ======================
-    # Chart 1
-    # ======================
-    with t1:
-        st.markdown("### Chart 1: Price vs Date (trendlines by Product Type + Grade)")
-        c_df = _apply_coa_selector(c_base, "coa_sel_chart1")
-
-        if c_df.empty or "Date" not in c_df.columns or "Price (CAD)" not in c_df.columns:
-            st.info("No data available for Chart 1 under current filters.")
-        else:
-            fig = px.scatter(
-                c_df.dropna(subset=["Date", "Price (CAD)"]),
-                x="Date",
-                y="Price (CAD)",
-                color="ProdGrade",
-                symbol="COA Status",
-                trendline="ols",
-                trendline_scope="trace",
-                hover_data=[c for c in ["Sale ID", "Product Type", "Grade", "Country", "Customer Name"] if c in c_df.columns],
-                title="Price vs Date by Product+Grade (symbol = COA Status)",
-            )
-            fig = style_fig(fig, height=520)
-            st.plotly_chart(fig, use_container_width=True, key=pkey("comp_chart1"))
-
-
-        # DIR expander
-        total_rows = int(len(c_df))
-        rows_with_price = int(c_df["Price (CAD)"].notna().sum()) if "Price (CAD)" in c_df.columns else 0
-        unique_prodgrade = int(c_df["ProdGrade"].nunique()) if "ProdGrade" in c_df.columns else 0
-        coa_rate = float((c_df["COA Status"] == "With COA").mean() * 100) if ("COA Status" in c_df.columns and len(c_df) > 0) else None
-        date_min = c_df["Date"].min() if "Date" in c_df.columns else None
-        date_max = c_df["Date"].max() if "Date" in c_df.columns else None
-        avg_price = float(c_df["Price (CAD)"].mean()) if "Price (CAD)" in c_df.columns else None
-        med_price = float(c_df["Price (CAD)"].median()) if "Price (CAD)" in c_df.columns else None
-
-        top_prodgrade = None
-        if "ProdGrade" in c_df.columns and len(c_df) > 0:
-            vc = c_df["ProdGrade"].value_counts()
-            top_prodgrade = vc.index[0] if len(vc) else None
-            top_prodgrade_n = int(vc.iloc[0]) if len(vc) else None
-        else:
-            top_prodgrade_n = None
-
-        definitions_md = """
-**What this chart shows**
-- **Each point** is a sale.
-- **Color = Product Type | Grade** (`ProdGrade`).
-- **Symbol = COA Status**.
-- **Trendline (OLS)** estimates the direction of price over time for each trace.
-"""
-        metrics = [
-            {"label": "Rows in view", "value": _fmt_num(total_rows), "help": "After global filters + COA selector"},
-            {"label": "Rows with price", "value": _fmt_num(rows_with_price)},
-            {"label": "COA rate", "value": _fmt_pct(coa_rate)},
-            {"label": "Avg price", "value": _fmt_money(avg_price)},
-            {"label": "Median price", "value": _fmt_money(med_price)},
-        ]
-        if date_min is not None and date_max is not None:
-            metrics.append({"label": "Date range", "value": f"{date_min.date()} → {date_max.date()}"})
-        if top_prodgrade is not None and top_prodgrade_n is not None:
-            metrics.append({"label": "Top Product+Grade", "value": f"{top_prodgrade} (n={top_prodgrade_n:,})"})
-
-        recs_md = """
-**Recommendations**
-- If a trace trends up/down, review **pricing**, **mix shifts**, and **discounting** over that period.
-- Compare **With COA vs Without COA** at similar times/products to validate whether COA correlates with higher achieved prices.
-- If some traces are sparse, consider grouping by **Product Type only** for more stable inference.
-"""
-        render_dir_expander_metrics("Chart 1", definitions_md, metrics, recs_md)
-
-    # ======================
-    # Chart 2
+    # COA Premium by Grade (was Chart 2)
     # ======================
     with t2:
-        st.markdown("### Chart 2: COA Price Premium by Grade")
-        c_df = _apply_coa_selector(c_base, "coa_sel_chart2")
+        st.markdown("### COA Price Premium by Grade")
+        c_df = _apply_coa_selector(c_base, "coa_sel_premium_grade")
 
         if c_df.empty or "Grade" not in c_df.columns or "Price (CAD)" not in c_df.columns:
-            st.info("No data available for Chart 2 under current filters.")
+            st.info("No data available under current filters.")
         else:
             price_df = c_df.dropna(subset=["Grade", "Price (CAD)"]).copy()
             agg_price = (
@@ -4363,7 +4288,7 @@ with tab_compliance:
             )
 
             if agg_price.empty:
-                st.info("No Grade/COA combinations found for Chart 2.")
+                st.info("No Grade/COA combinations found.")
             else:
                 grade_order = sorted(agg_price["Grade"].astype(str).unique().tolist())
                 fig2 = px.bar(
@@ -4378,7 +4303,7 @@ with tab_compliance:
                     title="Average Price by Grade and COA Status",
                 )
                 fig2 = style_fig(fig2, height=520)
-                st.plotly_chart(fig2, use_container_width=True, key=pkey("comp_chart2"))
+                st.plotly_chart(fig2, use_container_width=True, key=pkey("comp_premium_grade"))
 
         # DIR expander
         total_rows = int(len(c_df))
@@ -4429,119 +4354,21 @@ with tab_compliance:
 - If premium is near-zero, validate whether the grade already signals quality strongly enough.
 - Averages can be skewed—consider adding a **median** version later.
 """
-        render_dir_expander_metrics("Chart 2", definitions_md, metrics, recs_md)
+        render_dir_expander_metrics("COA Premium by Grade", definitions_md, metrics, recs_md)
 
     # ======================
-    # Chart 3
-    # ======================
-    with t3:
-        st.markdown("### Chart 3: Average Days from Sale to Shipment (Country × Grade)")
-        c_df = _apply_coa_selector(c_base, "coa_sel_chart3")
-
-        if c_df.empty or "Country" not in c_df.columns or "Grade" not in c_df.columns:
-            st.info("No data available for Chart 3 under current filters.")
-        else:
-            ship_df = c_df.copy()
-            ship_df = ship_df.dropna(subset=["Days_to_Ship"])
-            ship_df = ship_df[ship_df["Days_to_Ship"] >= 0]
-
-            if ship_df.empty:
-                st.info("No valid shipping intervals remain for Chart 3.")
-            else:
-                non_canada_mask = ship_df["Country"].astype(str).str.lower().ne("canada")
-                no_permit_mask = ship_df["Export_Permit_Clean"].isna()
-                removed = int((non_canada_mask & no_permit_mask).sum())
-                ship_df_chart = ship_df[~(non_canada_mask & no_permit_mask)].copy()
-
-                if removed > 0:
-                    st.warning(f"{removed} export rows without permits were excluded from Chart 3.")
-
-                if ship_df_chart.empty:
-                    st.info("After excluding export-without-permit rows, no data remains for Chart 3.")
-                else:
-                    ship_df_chart["Country_display"] = ship_df_chart["Country"].astype(str)
-                    ship_df_chart.loc[ship_df_chart["Country_display"].str.lower().eq("canada"), "Country_display"] = "Canada"
-
-                    agg_ship = (
-                        ship_df_chart.groupby(["Country_display", "Grade"], dropna=False)
-                        .agg(
-                            Avg_Days_to_Ship=("Days_to_Ship", "mean"),
-                            Shipment_Count=(("Sale ID" if "Sale ID" in ship_df_chart.columns else "Days_to_Ship"), "count"),
-                        )
-                        .reset_index()
-                    )
-
-                    has_canada = agg_ship["Country_display"].str.lower().eq("canada").any()
-                    others = sorted(agg_ship.loc[~agg_ship["Country_display"].str.lower().eq("canada"), "Country_display"].dropna().unique().tolist())
-                    ordered_countries = (["Canada"] + others) if has_canada else others
-                    grade_order = sorted(agg_ship["Grade"].dropna().astype(str).unique().tolist())
-
-                    fig3 = px.bar(
-                        agg_ship,
-                        x="Country_display",
-                        y="Avg_Days_to_Ship",
-                        color="Grade",
-                        barmode="group",
-                        category_orders={"Country_display": ordered_countries, "Grade": grade_order},
-                        hover_data=["Shipment_Count"],
-                        title="Average Days to Ship by Country and Grade (exports without permits excluded)",
-                        labels={"Avg_Days_to_Ship": "Average Days to Ship", "Country_display": "Country"},
-                    )
-                    fig3 = style_fig(fig3, height=560)
-                    st.plotly_chart(fig3, use_container_width=True, key=pkey("comp_chart3"))
-
-        # DIR expander
-        row_count = int(len(ship_df_chart)) if "ship_df_chart" in locals() else 0
-        dom_avg = None
-        exp_avg = None
-        if "ship_df_chart" in locals() and not ship_df_chart.empty:
-            is_dom = ship_df_chart["Country_display"].astype(str).str.lower().eq("canada")
-            dom_avg = float(ship_df_chart.loc[is_dom, "Days_to_Ship"].mean()) if is_dom.any() else None
-            exp_avg = float(ship_df_chart.loc[~is_dom, "Days_to_Ship"].mean()) if (~is_dom).any() else None
-
-        worst_country = None
-        worst_days = None
-        if "agg_ship" in locals() and "Country_display" in agg_ship.columns and not agg_ship.empty:
-            tmp = agg_ship.groupby("Country_display", dropna=False)["Avg_Days_to_Ship"].mean()
-            if not tmp.empty:
-                worst_country = tmp.idxmax()
-                worst_days = float(tmp.loc[worst_country])
-
-        definitions_md = """
-**What this chart shows**
-- Average **Days_to_Ship** by **Country × Grade**.
-- Excludes **exports missing a permit** to avoid mixing non-compliant shipping records.
-"""
-        metrics = [
-            {"label": "Rows used", "value": _fmt_num(row_count)},
-            {"label": "Excluded (no permit)", "value": _fmt_num(removed if "removed" in locals() else None)},
-            {"label": "Avg ship days (Canada)", "value": _fmt_num(dom_avg)},
-            {"label": "Avg ship days (Export)", "value": _fmt_num(exp_avg)},
-        ]
-        if worst_country is not None:
-            metrics.append({"label": "Slowest country", "value": f"{worst_country} ({_fmt_num(worst_days)}d)"})
-
-        recs_md = """
-**Recommendations**
-- If export shipping is slower, review **carrier choice**, **packaging workflow**, and **documentation lead time**.
-- Prioritize fixes for the **slowest country** (largest payoff).
-- If a specific grade ships slower, check for extra steps (COA creation, special handling).
-"""
-        render_dir_expander_metrics("Chart 3", definitions_md, metrics, recs_md)
-
-    # ======================
-    # Chart 4 (Ammolite preset bins)
+    # COA Adoption by Price Bucket (was Chart 4)
     # ======================
     with t4:
-        st.markdown("### Chart 4: COA Adoption by Price Bucket")
-        c_df = _apply_coa_selector(c_base, "coa_sel_chart4")
+        st.markdown("### COA Adoption by Price Bucket")
+        c_df = _apply_coa_selector(c_base, "coa_sel_price_bucket")
 
         if c_df.empty or "Price (CAD)" not in c_df.columns:
-            st.info("No data available for Chart 4 under current filters.")
+            st.info("No data available under current filters.")
         else:
             price_df = c_df.dropna(subset=["Price (CAD)"]).copy()
             if price_df.empty:
-                st.info("No rows with valid prices remain for Chart 4.")
+                st.info("No rows with valid prices remain.")
             else:
                 def round_up(x: float, step: int) -> int:
                     return int(math.ceil(x / step) * step)
@@ -4584,7 +4411,7 @@ with tab_compliance:
                         ordered=True
                     )
 
-                    st.caption(f"Using Ammolite preset bins up to ${cap:,.0f} (max price ${max_price:,.0f}).")
+                    st.caption(f"Using preset bins up to ${cap:,.0f} (max price ${max_price:,.0f}).")
 
                     grp = (
                         price_df.groupby(["PriceBinLabel", "COA Status"], dropna=False, observed=False)
@@ -4593,7 +4420,7 @@ with tab_compliance:
                     )
 
                     if grp.empty:
-                        st.info("No price bins could be formed for Chart 4.")
+                        st.info("No price bins could be formed.")
                     else:
                         ordered_labels = labels  # keep all bins even if empty
 
@@ -4645,7 +4472,7 @@ with tab_compliance:
                         )
 
                         fig4 = style_fig(fig4, height=560)
-                        st.plotly_chart(fig4, use_container_width=True, key=pkey("comp_chart4"))
+                        st.plotly_chart(fig4, use_container_width=True, key=pkey("comp_price_bucket"))
 
         # DIR expander
         total_sales = int(price_df.shape[0]) if "price_df" in locals() else 0
@@ -4680,7 +4507,7 @@ with tab_compliance:
 **What this chart shows**
 - **Stacked bars**: sales count per price bucket split by **COA Status**.
 - **Line**: **COA Adoption (%)** = With COA / Total within that bucket.
-- Buckets use your **Ammolite preset** ranges + a dynamic top cap.
+- Buckets use preset ranges + a dynamic top cap.
 """
         metrics = [
             {"label": "Sales (priced rows)", "value": _fmt_num(total_sales)},
@@ -4700,24 +4527,24 @@ with tab_compliance:
 - If adoption is low at low prices, consider **batch COA workflows** to reduce overhead.
 - Prioritize improvements in the **highest volume bucket** for maximum impact.
 """
-        render_dir_expander_metrics("Chart 4", definitions_md, metrics, recs_md)
+        render_dir_expander_metrics("COA Adoption by Price Bucket", definitions_md, metrics, recs_md)
 
     # ======================
-    # Chart 5
+    # Shipping Delay Distribution (was Chart 5)
     # ======================
     with t5:
-        st.markdown("### Chart 5: Shipping Delay Distribution by Compliance Group")
-        c_df = _apply_coa_selector(c_base, "coa_sel_chart5")
+        st.markdown("### Shipping Delay Distribution by Compliance Group")
+        c_df = _apply_coa_selector(c_base, "coa_sel_ship_dist")
 
         if c_df.empty or "Country" not in c_df.columns:
-            st.info("No data available for Chart 5 under current filters.")
+            st.info("No data available under current filters.")
         else:
             ship_df = c_df.copy()
             ship_df = ship_df.dropna(subset=["Days_to_Ship"])
             ship_df = ship_df[ship_df["Days_to_Ship"] >= 0]
 
             if ship_df.empty:
-                st.info("No valid shipping intervals remain for Chart 5.")
+                st.info("No valid shipping intervals remain.")
             else:
                 non_canada_mask = ship_df["Country"].astype(str).str.lower().ne("canada")
                 no_permit_mask = ship_df["Export_Permit_Clean"].isna()
@@ -4732,7 +4559,7 @@ with tab_compliance:
 
                 ship_df_chart = ship_df[~(non_canada_mask & no_permit_mask)].copy()
                 if ship_df_chart.empty:
-                    st.info("After exclusions, no data remains for Chart 5.")
+                    st.info("After exclusions, no data remains.")
                 else:
                     ship_df_chart["Country_display"] = ship_df_chart["Country"].astype(str)
                     ship_df_chart.loc[ship_df_chart["Country_display"].str.lower().eq("canada"), "Country_display"] = "Canada"
@@ -4771,7 +4598,7 @@ with tab_compliance:
                     )
                     fig5.update_layout(xaxis_tickangle=-20)
                     fig5 = style_fig(fig5, height=560)
-                    st.plotly_chart(fig5, use_container_width=True, key=pkey("comp_chart5"))
+                    st.plotly_chart(fig5, use_container_width=True, key=pkey("comp_ship_dist"))
 
         # DIR expander
         count_rows = int(len(ship_df_chart)) if "ship_df_chart" in locals() else 0
@@ -4815,17 +4642,17 @@ with tab_compliance:
 - If “Domestic - With COA” is slower than “Domestic - No COA”, COA creation may be gating fulfillment—consider **pre-generating COAs**.
 - Target groups with the widest spread for **variance reduction** (standardize steps).
 """
-        render_dir_expander_metrics("Chart 5", definitions_md, metrics, recs_md)
+        render_dir_expander_metrics("Shipping Delay Distribution", definitions_md, metrics, recs_md)
 
     # ======================
-    # Chart 6
+    # Compliance Score vs Order Value (was Chart 6)
     # ======================
     with t6:
-        st.markdown("### Chart 6: Compliance Score vs Average Order Value (Domestic vs Export)")
-        c_df = _apply_coa_selector(c_base, "coa_sel_chart6")
+        st.markdown("### Compliance Score vs Average Order Value (Domestic vs Export)")
+        c_df = _apply_coa_selector(c_base, "coa_sel_comp_score")
 
         if c_df.empty or "Country" not in c_df.columns or "Price (CAD)" not in c_df.columns:
-            st.info("No data available for Chart 6 under current filters.")
+            st.info("No data available under current filters.")
         else:
             comp_df = c_df.dropna(subset=["Price (CAD)"]).copy()
 
@@ -4861,7 +4688,7 @@ with tab_compliance:
             )
 
             if agg_comp.empty:
-                st.info("No combinations available for Chart 6 under current filters.")
+                st.info("No combinations available under current filters.")
             else:
                 score_order = [
                     "0 - No COA / No Permit",
@@ -4886,7 +4713,7 @@ with tab_compliance:
                     title="Average Order Value by Compliance Score and Market Type",
                 )
                 fig6 = style_fig(fig6, height=560)
-                st.plotly_chart(fig6, use_container_width=True, key=pkey("comp_chart6"))
+                st.plotly_chart(fig6, use_container_width=True, key=pkey("comp_score_aov"))
 
         # DIR expander
         rows_used = int(len(comp_df)) if "comp_df" in locals() else 0
@@ -4931,17 +4758,17 @@ with tab_compliance:
 - For exports, standardize a “**permit + COA checklist**” to move orders from Score 0/1 → 2.
 - If Score 1 ≈ Score 2, focus on whichever component (COA vs permit) is cheaper/faster to improve.
 """
-        render_dir_expander_metrics("Chart 6", definitions_md, metrics, recs_md)
+        render_dir_expander_metrics("Compliance Score vs Order Value", definitions_md, metrics, recs_md)
 
     # ======================
-    # Chart 7
+    # COA Coverage by Product Type (was Chart 7)
     # ======================
     with t7:
-        st.markdown("### Chart 7: COA Coverage by Product Type")
-        c_df = _apply_coa_selector(c_base, "coa_sel_chart7")
+        st.markdown("### COA Coverage by Product Type")
+        c_df = _apply_coa_selector(c_base, "coa_sel_coverage_pt")
 
         if c_df.empty or "Product Type" not in c_df.columns:
-            st.info("No data available for Chart 7 under current filters.")
+            st.info("No data available under current filters.")
         else:
             df7 = c_df.copy()
             df7["Has_Valid_COA"] = df7["COA Status"].eq("With COA")
@@ -4957,7 +4784,7 @@ with tab_compliance:
             )
 
             if agg7.empty:
-                st.info("No product types available for Chart 7.")
+                st.info("No product types available.")
             else:
                 fig7 = px.bar(
                     agg7,
@@ -4970,7 +4797,7 @@ with tab_compliance:
                 )
                 fig7.update_layout(yaxis_tickformat=".0%")
                 fig7 = style_fig(fig7, height=560)
-                st.plotly_chart(fig7, use_container_width=True, key=pkey("comp_chart7"))
+                st.plotly_chart(fig7, use_container_width=True, key=pkey("comp_coverage_pt"))
 
         # DIR expander
         overall_rate = float(df7["Has_Valid_COA"].mean() * 100) if ("df7" in locals() and not df7.empty and "Has_Valid_COA" in df7.columns) else None
@@ -5004,7 +4831,8 @@ with tab_compliance:
 - If low coverage types are niche/low volume, consider “**COA optional under $X**”.
 - Track coverage over time to confirm process changes are improving adoption.
 """
-        render_dir_expander_metrics("Chart 7", definitions_md, metrics, recs_md)
+        render_dir_expander_metrics("COA Coverage by Product Type", definitions_md, metrics, recs_md)
+
 # -----------------------------
 # TAB: All Data
 # -----------------------------
