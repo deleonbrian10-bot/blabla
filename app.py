@@ -2604,11 +2604,12 @@ if page == 'Customer Segments':
         st.markdown("#### New vs Returning Customers Over Time")
 
         days_option = st.selectbox("Select time frame for new customers:",options=[30, 60, 90],index=2)
-        recent_threshold = pd.Timestamp.today() - pd.Timedelta(days=days_option)
-        first_purchase = df.groupby("Customer Name")["Date"].min().reset_index()
+       recent_threshold = pd.Timestamp.today() - pd.Timedelta(days=days_option)
+        df["CustomerID"] = df["Customer Name"].astype(str) + " | " + df["Country"].astype(str) + " | " + df["City"].astype(str)
+        first_purchase = df.groupby("CustomerID")["Date"].min().reset_index()
         first_purchase.rename(columns={"Date": "FirstPurchase"}, inplace=True)
 
-        df_new_returning = df.merge(first_purchase, on="Customer Name", how="left")
+        df_new_returning = df.merge(first_purchase, on="CustomerID", how="left")
         df_new_returning["CustomerStatus"] = df_new_returning["FirstPurchase"].apply(lambda x: "New" if x >= recent_threshold else "Returning")
         df_new = df_new_returning[(df_new_returning["CustomerStatus"] == "New") &(df_new_returning["Date"] >= recent_threshold)]
 
@@ -2732,7 +2733,7 @@ if page == 'Customer Segments':
             st.markdown("\n".join(recs))
 
     with s_tabs[3]:
-        cust_stats = (df.groupby(["Customer Name", "Customer Type"], as_index=False).agg(Orders=("OrderCount", "sum"),Total_Net_Sales=("Net Sales", "sum"), Avg_Order=("Net Sales", "mean"), Last_Purchase=("Date", "max"))
+        cust_stats = (f.groupby(["Customer Name", "Customer Type"], as_index=False).agg(Orders=("OrderCount", "sum"),Total_Net_Sales=("Net Sales", "sum"), Avg_Order=("Net Sales", "mean"), Last_Purchase=("Date", "max"))
         )
         cust_stats["Recency"] = (pd.Timestamp.today() - cust_stats["Last_Purchase"]).dt.days
         cust_stats["CLV"] = cust_stats["Avg_Order"] * cust_stats["Orders"]
