@@ -17,6 +17,7 @@ import plotly.io as pio
 from itertools import count
 import matplotlib.pyplot as plt
 from plotly.subplots import make_subplots
+from groq import Groq
 
 # =========================================================
 # Help Modal (Fragile Months)
