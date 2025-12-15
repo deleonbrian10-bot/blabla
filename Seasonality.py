@@ -4486,9 +4486,22 @@ with tab_seasonality:
                             how="left",
                             suffixes=("", "_m"),
                         )
+
+                        # ✅ If merge created suffixed columns, use them
+                        if "Critical_PT_m" in out.columns:
+                            out["Critical_PT"] = out["Critical_PT_m"].combine_first(out["Critical_PT"])
+                            out.drop(columns=["Critical_PT_m"], inplace=True)
+
+                        if "Critical_Grade_m" in out.columns:
+                            out["Critical_Grade"] = out["Critical_Grade_m"].combine_first(out["Critical_Grade"])
+                            out.drop(columns=["Critical_Grade_m"], inplace=True)
+
+                        # ✅ Now safe to fill
                         out["At_Risk"] = out["At_Risk"].fillna(0.0)
                         out["Critical_PT"] = out["Critical_PT"].fillna("Unknown")
                         out["Critical_Grade"] = out["Critical_Grade"].fillna("N/A")
+
+
 
                     at_risk_label = "At Risk: Per-period #1 Product"
 
