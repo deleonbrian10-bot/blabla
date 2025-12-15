@@ -827,6 +827,7 @@ _main_pages = [
 ]
 page = st.sidebar.radio("Navigate", _main_pages, index=0, key="nav_main")
 st.session_state["_ai_figs"] = []  # reset captured charts each rerun
+st.session_state["_ai_override_df"] = {}  # per-figure data overrides (reset each rerun)
 st.sidebar.markdown("---")
 
 
@@ -3064,6 +3065,17 @@ if page == 'Geography & Channels':
             top_tbl = agg.sort_values("value", ascending=False).head(15).copy()
             top_tbl = rank_df(top_tbl)
             st.dataframe(top_tbl.set_index("#")[["Country", "value", "share"]], use_container_width=True)
+            # ---- AI override: use the "Top markets" table for Groq context instead of map pixels ----
+            try:
+                _ai_tbl = (
+                    top_tbl.set_index("#")[["Country", "value", "share"]]
+                    .reset_index()
+                    .rename(columns={"#": "Rank"})
+                )
+                st.session_state.setdefault("_ai_override_df", {})[id(fig)] = _ai_tbl
+            except Exception:
+                pass
+
 
         # ---- Dynamic insights (World Map) ----
         n_countries = int(agg["Country"].nunique()) if not agg.empty else 0
@@ -6599,6 +6611,15 @@ if page == 'All Data':
 # -----------------------------
 st.markdown("---")
 with st.expander("🤖 Ask AI about the chart on this page (Groq)", expanded=False):
+    with st.expander("What this AI tool can’t do (limitations)", expanded=False):
+        st.markdown(
+            """- The AI **only** sees the compact CSV shown below (derived from the current chart’s data, or a linked table override).
+- It **cannot “see” the rendered graphics** (colors, shapes, map shading, annotations, layout) unless those values are explicitly present in the CSV.
+- If a visual is not a Plotly chart (e.g., images, custom HTML, screenshots) or the chart doesn’t expose point values, the AI may have **little/no usable data**.
+- It does **not** have access to your full dataset or filters beyond what’s included in the compact CSV.
+- Treat outputs as **analysis help**, not authoritative advice—double-check before making operational/compliance decisions."""
+        )
+
     figs = st.session_state.get("_ai_figs", []) or []
     # De-dupe within this run (defensive; should usually be unnecessary)
     _seen_ids = set()
@@ -6631,9 +6652,17 @@ with st.expander("🤖 Ask AI about the chart on this page (Groq)", expanded=Fal
 
         # Build compact CSV context from selected figure
         sel_fig = figs[pick]
-        context_csv = _fig_to_compact_csv(sel_fig, max_rows=1200)
+        # Build compact CSV context from selected figure (with optional per-figure override)
+        _override = (st.session_state.get("_ai_override_df") or {}).get(id(sel_fig))
+        if isinstance(_override, pd.DataFrame) and not _override.empty:
+            context_csv = _override.to_csv(index=False)
+            _context_source = "table"
+        else:
+            context_csv = _fig_to_compact_csv(sel_fig, max_rows=1200)
+            _context_source = "chart"
 
         with st.expander("Show compact CSV sent to Groq", expanded=False):
+            st.caption(f"Context source: **{_context_source}** (table override used when available).")
             # Render the CSV context as a table for readability
             try:
                 import io as _io
