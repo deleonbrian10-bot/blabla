@@ -6619,21 +6619,36 @@ with st.expander("🤖 Ask AI about the chart on this page (Groq)", expanded=Fal
 
         pick = st.selectbox("Pick a chart", options=list(range(len(figs))), format_func=lambda i: labels[i], key="groq_chart_pick")
 
-        user_q = st.text_area(
-            "Question for the AI",
-            key="groq_user_question",
-            placeholder="e.g. What trend stands out? Are there outliers or differences between categories?",
-        )
+        with st.form("groq_qa_form", clear_on_submit=False):
+            user_q = st.text_input(
+                "Question for the AI",
+                key="groq_user_question",
+                placeholder="e.g. What trend stands out? Are there outliers or differences between categories?",
+            )
+            st.caption("Tip: Press Enter to submit.")
+            ask_groq = st.form_submit_button("Ask Groq")
 
         # Build compact CSV context from selected figure
         sel_fig = figs[pick]
         context_csv = _fig_to_compact_csv(sel_fig, max_rows=1200)
 
         with st.expander("Show compact CSV sent to Groq", expanded=False):
-            lines = context_csv.splitlines()
-            preview_n = min(len(lines), 220)  # keep UI snappy
-            st.caption(f"Showing {preview_n:,} of {len(lines):,} lines (max rows capped when generated).")
-            st.code("\n".join(lines[:preview_n]), language="csv")
+            # Render the CSV context as a table for readability
+            try:
+                import io as _io
+                _csv_df = pd.read_csv(_io.StringIO(context_csv))
+                st.caption(f"Rows: {len(_csv_df):,} | Columns: {len(_csv_df.columns):,}")
+                st.dataframe(_csv_df, use_container_width=True, height=320)
+            except Exception as _e:
+                # Fallback to raw text if parsing fails for any reason
+                lines = context_csv.splitlines()
+                preview_n = min(len(lines), 220)  # keep UI snappy
+                st.caption(
+                    f"Couldn't render as a table (showing CSV text instead). "
+                    f"Showing {preview_n:,} of {len(lines):,} lines."
+                )
+                st.code("\n".join(lines[:preview_n]), language="csv")
+
             st.download_button(
                 "Download compact CSV",
                 data=context_csv.encode("utf-8"),
@@ -6642,7 +6657,7 @@ with st.expander("🤖 Ask AI about the chart on this page (Groq)", expanded=Fal
                 key="dl_groq_context_csv",
             )
 
-        if st.button("Ask Groq", key="btn_ask_groq"):
+        if ask_groq:
             if not user_q.strip():
                 st.info("Please enter a question before asking the AI.")
             elif not st.session_state.get("groq_api_key"):
