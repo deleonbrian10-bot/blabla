@@ -2319,7 +2319,7 @@ if page == 'Product Mix':
 # -----------------------------
 # TAB: Customer Segments (RFM added)
 # -----------------------------
-with tab_segments:
+if page == 'Customer Segments':
     st.subheader("Customer Segments – Who Buys and Who Matters?")
     s_df = f.copy()
 
