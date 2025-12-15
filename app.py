@@ -645,10 +645,29 @@ if not getattr(st.plotly_chart, "__ai_capture__", False):
     _ORIG_PLOTLY_CHART = st.plotly_chart
 
     def _plotly_chart_capture(fig, *args, **kwargs):
+        # Capture figures rendered this run (for Groq picker)
         try:
             st.session_state["_ai_figs"].append(fig)
         except Exception:
             pass
+
+        # Prevent Plotly titles overlapping the plot area (non-invasive)
+        try:
+            title_text = getattr(getattr(getattr(fig, "layout", None), "title", None), "text", None)
+            if title_text:
+                fig.update_layout(title=dict(automargin=True))
+                t = None
+                try:
+                    t = fig.layout.margin.t
+                except Exception:
+                    t = None
+                # If multi-line title, reserve a bit more space
+                min_t = 90 if "<br" in str(title_text) else 70
+                if t is None or t < min_t:
+                    fig.update_layout(margin=dict(t=min_t))
+        except Exception:
+            pass
+
         return _ORIG_PLOTLY_CHART(fig, *args, **kwargs)
 
     _plotly_chart_capture.__ai_capture__ = True
@@ -929,9 +948,10 @@ def style_fig(fig, height=430):
     # ✅ White chart background + black text + FIXED hoverlabel (no ValueError)
     fig.update_layout(
         height=height,
-        margin=dict(l=10, r=10, t=55, b=40),
+        margin=dict(l=10, r=10, t=80, b=40),
         paper_bgcolor="#FFFFFF",
         plot_bgcolor="#FFFFFF",
+        title=dict(automargin=True),
         font=dict(family="SpaceGrotesk", size=12, color="#000000"),
         legend=dict(
             font=dict(size=11, family="SpaceGrotesk", color="#000000"),
