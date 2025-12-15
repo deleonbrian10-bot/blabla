@@ -2316,26 +2316,24 @@ if page == 'Product Mix':
         )
         st.markdown("</div>", unsafe_allow_html=True)
 # -----------------------------
+# -----------------------------
 # TAB: Customer Segments (RFM added)
 # -----------------------------
-if page == 'Customer Segments':
+with tab_segments:
     st.subheader("Customer Segments – Who Buys and Who Matters?")
     s_df = f.copy()
 
-    s_tabs = st.tabs(["Overview","New x Returning", "Segment × Channel", "Customer Value", "RFM", "Data"])
+    s_tabs = st.tabs(["Overview","New x Returning", "Segment × Channel", "Customer Value", "RFM"])
 
     with s_tabs[0]:
-        seg = s_df.groupby("Customer Type", as_index=False)[metric_col].sum().sort_values(metric_col, ascending=False)
-        fig1 = px.bar(seg, x="Customer Type", y=metric_col, title=f"{metric_label} by Customer Segment", text_auto=".2s")
-        fig1.update_layout(xaxis_title="", yaxis_title=metric_label)
-        fig1 = style_fig(fig1, height=430)
-        st.plotly_chart(fig1, use_container_width=True, key=pkey("seg_bar"))
+        seg = (s_df.groupby("Customer Type", as_index=False)[metric_col].sum().sort_values(metric_col, ascending=False))
 
-        fig2 = px.pie(seg, names="Customer Type", values=metric_col, title=f"Share of {metric_label} by Segment", hole=0.35)
-        fig2 = style_fig(fig2, height=430)
-        fig2.update_layout(showlegend=True, legend=dict(orientation="v",yanchor="top", y=1, xanchor="left", x=1.05),margin=dict(r=160))
+        fig = px.pie(seg,names="Customer Type",values=metric_col,title="Net Sales by Customer Segment",hole=0.35)
+        fig.update_traces(textposition="inside",texttemplate="%{label}<br>(%{percent})",hovertemplate="<b>%{label}</b><br>Net Sales: $%{value:,.0f}<extra></extra>")
+        fig = style_fig(fig, height=430)
+        fig.update_layout(showlegend=True,legend=dict(orientation="v",yanchor="top",y=1,xanchor="left",x=1.05),margin=dict(r=160))
 
-        st.plotly_chart(fig2, use_container_width=True, key=pkey("seg_pie"))
+        st.plotly_chart(fig, use_container_width=True, key=pkey("seg_pie"))
 
         st.subheader("Description")
         st.write("""
@@ -2387,38 +2385,37 @@ if page == 'Customer Segments':
     with s_tabs[1]:
         st.markdown("#### New vs Returning Customers Over Time")
 
+        days_option = st.selectbox("Select time frame for new customers:",options=[30, 60, 90],index=2)
+        recent_threshold = pd.Timestamp.today() - pd.Timedelta(days=days_option)
         first_purchase = df.groupby("Customer Name")["Date"].min().reset_index()
         first_purchase.rename(columns={"Date": "FirstPurchase"}, inplace=True)
 
         df_new_returning = df.merge(first_purchase, on="Customer Name", how="left")
+        df_new_returning["CustomerStatus"] = df_new_returning["FirstPurchase"].apply(lambda x: "New" if x >= recent_threshold else "Returning")
+        df_new = df_new_returning[(df_new_returning["CustomerStatus"] == "New") &(df_new_returning["Date"] >= recent_threshold)]
 
-        recent_threshold = pd.Timestamp.today() - pd.Timedelta(days=90)
-        df_new_returning["CustomerStatus"] = np.where(df_new_returning["FirstPurchase"] >= recent_threshold, "New", "Returning")
-        df_new_returning["Month"] = df_new_returning["Date"].dt.to_period("M").dt.to_timestamp()
-        monthly_rev = (df_new_returning.groupby(["Month", "CustomerStatus"], as_index=False)["Net Sales"]
-                       .sum()
-                       )
+        df_returning = df_new_returning[df_new_returning["CustomerStatus"] == "Returning"]
+        df_combined = pd.concat([df_new, df_returning])
+        df_combined["Month"] = df_combined["Date"].dt.to_period("M").dt.to_timestamp()
+        monthly_rev = df_combined.groupby(["Month", "CustomerStatus"], as_index=False)["Net Sales"].sum()
 
-        fig = px.line(
-            monthly_rev,x="Month",y="Net Sales",color="CustomerStatus",title="Monthly Revenue: New vs Returning Customers",markers=True,color_discrete_map={"New": "#1f77b4", "Returning": "#ff7f0e"})
+        fig = px.line(monthly_rev,x="Month",y="Net Sales",color="CustomerStatus",title="Monthly Revenue: New vs Returning Customers",markers=True,color_discrete_map={"New": "#1f77b4", "Returning": "#ff7f0e"})
         fig.update_layout(xaxis_title="Month",yaxis_title="Net Sales (CAD)",legend=dict(title="Customer Status"),margin=dict(t=80, r=50, l=50, b=50))
-        fig = style_fig(fig, height=450)
+        fig = style_fig(fig, height=450) if 'style_fig' in globals() else fig
         st.plotly_chart(fig, use_container_width=True)
 
-        top_new = \
-        df_new_returning[df_new_returning["CustomerStatus"] == "New"].groupby("Customer Name", as_index=False)[
-            "Net Sales"].sum().sort_values("Net Sales", ascending=False).head(10)
-        top_returning = \
-        df_new_returning[df_new_returning["CustomerStatus"] == "Returning"].groupby("Customer Name", as_index=False)[
-            "Net Sales"].sum().sort_values("Net Sales", ascending=False).head(10)
+        top_new = (df_new.groupby(["Customer Name", "Customer Type"], as_index=False)["Net Sales"].sum().sort_values("Net Sales", ascending=False).head(10))
+
+        top_returning = (df_returning.groupby(["Customer Name", "Customer Type"], as_index=False)["Net Sales"].sum().sort_values("Net Sales", ascending=False).head(10))
 
         c1, c2 = st.columns(2)
         with c1:
             st.markdown("**Top 10 New Customers by Spend**")
-            st.dataframe(top_new.style.format({"Net Sales": "${:,.0f}"}), use_container_width=True)
+            st.dataframe(top_new[["Customer Name", "Customer Type", "Net Sales"]].style.format({"Net Sales": "${:,.0f}"}),use_container_width=True)
+
         with c2:
             st.markdown("**Top 10 Returning Customers by Spend**")
-            st.dataframe(top_returning.style.format({"Net Sales": "${:,.0f}"}), use_container_width=True)
+            st.dataframe(top_returning[["Customer Name", "Customer Type", "Net Sales"]].style.format({"Net Sales": "${:,.0f}"}),use_container_width=True)
 
         st.subheader("Description")
         st.markdown("""
@@ -2546,7 +2543,7 @@ if page == 'Customer Segments':
         with c2:
             fig = px.scatter(cust_stats,x="Orders",y="Total_Net_Sales",color="Customer Type",size="CLV_scaled", title="Customer Value – Orders vs Total Net Sales (bubble = CLV)", hover_name='hover_text',labels={"Customer Type": ""})
             fig.update_layout(xaxis_title="Orders",yaxis_title="Total Net Sales (CAD)",legend=dict( orientation="v",x=1.02, xanchor="left",y=1, yanchor="top"),margin=dict(t=120,   r=150,l=50,b=50))
-            fig = style_fig(fig, height=450)
+            fig = style_fig(fig, height=450) if 'style_fig' in globals() else fig
             st.plotly_chart(fig, use_container_width=True, key=pkey("seg_scatter"))
 
         st.subheader("Description")
@@ -2582,19 +2579,43 @@ if page == 'Customer Segments':
 
         ref_date = s_df["Date"].max()
 
-        rfm = (s_df.groupby("Customer Name", as_index=False).agg(LastPurchase=("Date", "max"), Frequency=("OrderCount", "sum"),Monetary=("Net Sales", "sum")))
+        customer_type_map = s_df.groupby("Customer Name")["Customer Type"].first().reset_index()
+
+        rfm = s_df.groupby("Customer Name", as_index=False).agg(LastPurchase=("Date", "max"),Frequency=("OrderCount", "sum"),Monetary=("Net Sales", "sum"))
+        rfm = rfm.merge(customer_type_map, on="Customer Name", how="left")
         rfm["RecencyDays"] = (ref_date - rfm["LastPurchase"]).dt.days
         rfm = rfm.replace([np.inf, -np.inf], np.nan).dropna(subset=["RecencyDays", "Frequency", "Monetary"])
-
         rfm["CLV_scaled"] = (rfm["Monetary"] * rfm["Frequency"]) / (rfm["Monetary"] * rfm["Frequency"]).max() * 100
 
-        fig = px.scatter(rfm,x="RecencyDays", y="Frequency", size="CLV_scaled", color="Monetary",
-            hover_name="Customer Name",
-            hover_data={"RecencyDays": True,"Frequency": True,"Monetary": True},title="RFM Bubble Chart: Recency × Frequency × Monetary",color_continuous_scale="Viridis",size_max=40)
+        st.markdown("#### Filter Options")
+        col1, col2, col3 = st.columns(3)
 
-        fig.update_layout(xaxis_title="Recency (days since last purchase)",yaxis_title="Frequency (Number of Orders)", margin=dict(t=50, l=50, r=50, b=50))
+        with col1:
+            max_frequency = int(rfm["Frequency"].max())
+            default_min_orders = min(1, max_frequency)
+            min_orders = st.number_input("Minimum number of orders:",min_value=1,max_value=max_frequency,value=default_min_orders,step=1)
 
-        fig = style_fig(fig, height=450)
+        with col2:
+            max_recency_val = int(rfm["RecencyDays"].max())
+            default_max_recency = min(90, max_recency_val)
+            max_recency = st.slider("Maximum recency (days):",min_value=0,max_value=max_recency_val,value=default_max_recency)
+
+        with col3:
+            max_sales_val = int(rfm["Monetary"].max())
+            default_min_sales = min(100, max_sales_val)
+            min_sales = st.number_input("Minimum net sales:",min_value=0,max_value=max_sales_val,value=default_min_sales,step=100)
+
+        rfm_filtered = rfm[
+            (rfm["Frequency"] >= min_orders) &
+            (rfm["RecencyDays"] <= max_recency) &
+            (rfm["Monetary"] >= min_sales)
+            ]
+
+        rfm_filtered["HoverLabel"] = rfm_filtered.apply(lambda row: f"{row['Customer Name']} / {row['Customer Type']}",axis=1)
+
+        fig = px.scatter(rfm_filtered,x="RecencyDays",y="Frequency",size="CLV_scaled",color="Monetary",hover_name="HoverLabel", hover_data={}, title="RFM Bubble Chart: Recency × Frequency × Monetary",color_continuous_scale="Viridis",size_max=40)
+        fig.update_layout(xaxis_title="Recency (days since last purchase)",yaxis_title="Frequency (Number of Orders)",margin=dict(t=50, l=50, r=50, b=50))
+        fig = style_fig(fig, height=450) if 'style_fig' in globals() else fig
         st.plotly_chart(fig, use_container_width=True, key=pkey("rfm_bubble_2d"))
 
         st.subheader("Description")
@@ -2618,19 +2639,6 @@ if page == 'Customer Segments':
         ]
         st.markdown("\n".join(recs))
 
-    with s_tabs[5]:
-        cols = ["Sale ID", "Date", "Customer Name", "Customer Type", "Country", "City", "Channel", metric_col, "Net Sales"]
-        cols = [c for c in cols if c in s_df.columns]
-        subset = s_df[cols].copy()
-        subset = subset.loc[:, ~subset.columns.duplicated()]
-        st.dataframe(subset.head(max_rows), use_container_width=True)
-        st.download_button(
-            "Download customer-segment subset (CSV)",
-            data=subset.to_csv(index=False).encode("utf-8"),
-            file_name="customer_segments_subset.csv",
-            mime="text/csv",
-            key="dl_segments",
-        )
 
 # -----------------------------
 # TAB: Geography & Channels (Price-Drivers style layout)  YOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOO
