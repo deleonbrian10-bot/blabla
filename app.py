@@ -195,6 +195,88 @@ def _figure_title(fig) -> str:
     return "Untitled chart"
 
 
+def _figure_label(fig, idx: int, used=None) -> str:
+    """Create a friendly, unique label for a Plotly figure (even if untitled)."""
+    title = ""
+    try:
+        title = str(fig.layout.title.text or "").strip()
+    except Exception:
+        title = ""
+
+    # Basic chart shape/type
+    try:
+        traces = list(fig.data) if hasattr(fig, "data") else []
+    except Exception:
+        traces = []
+    trace_types = []
+    trace_names = []
+    for tr in traces:
+        ttype = getattr(tr, "type", None) or "trace"
+        trace_types.append(ttype)
+        nm = getattr(tr, "name", None)
+        if nm:
+            trace_names.append(str(nm))
+    # Compact unique types, keep order
+    seen = set()
+    types_uniq = []
+    for t in trace_types:
+        if t not in seen:
+            seen.add(t)
+            types_uniq.append(t)
+    types_txt = ", ".join(types_uniq) if types_uniq else "chart"
+
+    # Axis labels (if present)
+    def _axis_title(axis_obj):
+        try:
+            return str(axis_obj.title.text or "").strip()
+        except Exception:
+            return ""
+
+    xlab = ""
+    ylab = ""
+    try:
+        xlab = _axis_title(fig.layout.xaxis)
+    except Exception:
+        xlab = ""
+    try:
+        ylab = _axis_title(fig.layout.yaxis)
+    except Exception:
+        ylab = ""
+
+    # If title missing, synthesize a useful one
+    if not title:
+        if "pie" in types_uniq or "sunburst" in types_uniq or "treemap" in types_uniq:
+            # Pie-like charts: prefer trace names
+            if trace_names:
+                base = f"Chart {idx+1}: {types_txt} ({', '.join(trace_names[:2])}{'…' if len(trace_names) > 2 else ''})"
+            else:
+                base = f"Chart {idx+1}: {types_txt}"
+        else:
+            if xlab and ylab:
+                base = f"Chart {idx+1}: {ylab} vs {xlab}"
+            elif ylab:
+                base = f"Chart {idx+1}: {ylab} ({types_txt})"
+            elif xlab:
+                base = f"Chart {idx+1}: {types_txt} by {xlab}"
+            else:
+                base = f"Chart {idx+1}: {types_txt}"
+    else:
+        base = f"Chart {idx+1}: {title}"
+
+    # Ensure label uniqueness (dropdown-friendly)
+    if used is not None:
+        label = base
+        k = 2
+        while label in used:
+            label = f"{base} ({k})"
+            k += 1
+        used.add(label)
+        return label
+
+    return base
+
+
+
 def _fig_to_compact_csv(fig, max_rows: int = 1200) -> str:
     """
     Builds a compact CSV from what is actually plotted (trace-level x/y),
@@ -6530,11 +6612,12 @@ with st.expander("🤖 Ask AI about the chart on this page (Groq)", expanded=Fal
     if not figs:
         st.info("No Plotly charts detected on this page yet. Navigate to a page with charts to enable AI Q&A.")
     else:
-        titles = []
+        labels = []
+        _used_labels = set()
         for i, fig in enumerate(figs):
-            titles.append(f"{i+1}. {_figure_title(fig)}")
+            labels.append(_figure_label(fig, i, used=_used_labels))
 
-        pick = st.selectbox("Pick a chart", options=list(range(len(figs))), format_func=lambda i: titles[i], key="groq_chart_pick")
+        pick = st.selectbox("Pick a chart", options=list(range(len(figs))), format_func=lambda i: labels[i], key="groq_chart_pick")
 
         user_q = st.text_area(
             "Question for the AI",
@@ -6566,7 +6649,7 @@ with st.expander("🤖 Ask AI about the chart on this page (Groq)", expanded=Fal
                 st.error("Please paste your Groq API key in the sidebar first.")
             else:
                 chart_desc = f"""
-CHART TITLE: {_figure_title(sel_fig)}
+CHART: {_figure_label(sel_fig, pick)}
 """
                 prompt = f"""
 You are a data analyst interpreting a chart from an ammolite sales dashboard.
