@@ -4435,6 +4435,7 @@ if page == 'Ownership':
 # TAB: Seasonality (upgrade)
 # -----------------------------
 if page == 'Seasonality':
+
     # =========================================================
     # Header Row: Title + Caption (LEFT) | Time Grain (RIGHT)
     # =========================================================
@@ -4519,251 +4520,326 @@ if page == 'Seasonality':
         ]
     )
 
-    # 🔽 Your existing Subtab 1 / 2 / 3 code continues here
+   # =========================================================
+# SUBTAB 1 — Seasonal Price Sensitivity (DUAL-SCOPE LINES)
+# Bubbles/Flags = filtered by Product Type
+# Revenue + Volume lines = ALWAYS ALL SALES (do NOT change with Product Type filter)
+# X = MonthStart (Month-Year) | Y = Revenue
+# Bubble Size = Avg Price | Color = Grade
+# Flags (high-confidence) per Grade vs rolling 3-period baseline:
+#   Avg Price >= +5% AND Revenue <= -10% AND Volume <= -10%
+# Bubble hover shows Flag Type + Flag Reason ONLY when flagged
+# =========================================================
+with s1:
+    # -----------------------------
+    # Title + Help button (same row)
+    # -----------------------------
+    t1, t2 = st.columns([0.85, 0.15], vertical_alignment="center")
+    with t1:
+        st.subheader("Seasonal Price Sensitivity & Revenue Impact")
+    with t2:
+        if st.button("❓ Help", key=pkey("seasonality_help_btn")):
+            show_seasonality_help()
 
-    # =========================================================
-    # SUBTAB 1 — Seasonal Price Sensitivity (Period-based)
-    # X = PeriodStart | Y = Revenue | Bubble = Avg Price | Color = Grade
-    # Hover: Flag Type + Flag Reason ONLY when flagged
-    # =========================================================
-    with s1:
-        t1, t2 = st.columns([0.85, 0.15], vertical_alignment="center")
-        with t1:
-            st.subheader("Seasonal Price Sensitivity & Revenue Impact")
-        with t2:
-            if st.button("❓ Help", key=pkey("seasonality_help_btn")):
-                show_seasonality_help()
+    # -----------------------------
+    # Validation
+    # -----------------------------
+    if "Product Type" not in t_df.columns or "Grade" not in t_df.columns:
+        st.info("Need both 'Product Type' and 'Grade' columns to build this view.")
+    elif "Month" not in t_df.columns:
+        st.info("Need 'Month' column for Month-Year seasonality view.")
+    else:
+        df_el = t_df.dropna(subset=["Month", "Product Type", "Grade", price_col, revenue_col]).copy()
 
-        if "Product Type" not in t_df.columns or "Grade" not in t_df.columns:
-            st.info("Need both 'Product Type' and 'Grade' columns to build this view.")
-        elif "PeriodStart" not in t_df.columns:
-            st.info(f"Need a time field (Month/Date) to build the {PERIOD_NAME.lower()} view.")
+        if df_el.empty:
+            st.info("Not enough Month + Product Type + Grade + Price + Revenue data.")
         else:
-            df_el = t_df.dropna(
-                subset=["PeriodStart", "Product Type", "Grade", price_col, revenue_col]
-            ).copy()
+            # -----------------------------
+            # Normalize Month
+            # -----------------------------
+            df_el["MonthStart"] = (
+                pd.to_datetime(df_el["Month"], errors="coerce")
+                .dt.to_period("M")
+                .dt.to_timestamp()
+            )
+            df_el = df_el.dropna(subset=["MonthStart"])
+            df_el["MonthLabel"] = df_el["MonthStart"].dt.strftime("%b %Y")
 
-            if df_el.empty:
-                st.info(f"Not enough {PERIOD_NAME} + Product Type + Grade + Price + Revenue data.")
+            # ✅ df_all is ALWAYS all sales (used for revenue/volume lines)
+            df_all = df_el.copy()
+
+            # -----------------------------
+            # Product Type Filter (bubbles + flags only)
+            # -----------------------------
+            pt_list = sorted(df_el["Product Type"].astype(str).unique().tolist())
+            pt_choice = st.selectbox(
+                "Filter by Product Type (bubbles + flags only)",
+                options=["All"] + pt_list,
+                index=0,
+                key=pkey("seasonality_pt_filter"),
+            )
+
+            df_view = df_el if pt_choice == "All" else df_el[df_el["Product Type"].astype(str) == pt_choice]
+
+            if df_view.empty:
+                st.info("No data for the selected Product Type.")
             else:
-                # Filter: Product Type
-                pt_list = sorted(df_el["Product Type"].astype(str).unique().tolist())
-                pt_choice = st.selectbox(
-                    "Filter by Product Type",
-                    options=["All"] + pt_list,
-                    index=0,
-                    key=pkey("seasonality_pt_filter"),
-                )
-                df_view = df_el if pt_choice == "All" else df_el[df_el["Product Type"].astype(str) == pt_choice]
-
-                if df_view.empty:
-                    st.info("No data for the selected Product Type.")
-                else:
-                    # Aggregate: Period x Grade
-                    base = (
-                        df_view.groupby(["PeriodStart", "Grade"], as_index=False)
-                        .agg(
-                            Avg_Price=(price_col, "mean"),
-                            Revenue=(revenue_col, "sum"),
-                            Volume=(revenue_col, "size"),
-                        )
-                        .sort_values("PeriodStart")
+                # -----------------------------
+                # Aggregate Month x Grade (FILTERED)
+                # -----------------------------
+                base = (
+                    df_view.groupby(["MonthStart", "Grade"], as_index=False)
+                    .agg(
+                        Avg_Price=(price_col, "mean"),
+                        Revenue=(revenue_col, "sum"),
+                        Volume=(revenue_col, "size"),  # txn count as proxy volume
                     )
-                    if base.empty:
-                        st.info("No data after grouping.")
+                    .sort_values("MonthStart")
+                )
+
+                if base.empty:
+                    st.info("No data after grouping.")
+                else:
+                    base["Grade"] = base["Grade"].astype(str)
+                    base["MonthLabel"] = base["MonthStart"].dt.strftime("%b %Y")
+
+                    # Optional grade ordering (AAA/AA/A/B)
+                    grade_order = ["AAA", "AA", "A", "B","Collectibles"]
+                    present = [g for g in grade_order if g in base["Grade"].unique()]
+                    if present:
+                        base["Grade"] = pd.Categorical(base["Grade"], categories=present, ordered=True)
+                    base["GradeStr"] = base["Grade"].astype(str)
+
+                    # -----------------------------
+                    # HIGH-CONFIDENCE FLAGS (FILTERED, per Grade) vs rolling 3-period baseline
+                    # -----------------------------
+                    base_sorted = base.sort_values(["GradeStr", "MonthStart"]).copy()
+
+                    base_sorted["Roll_Avg_Price"] = (
+                        base_sorted.groupby("GradeStr")["Avg_Price"]
+                        .transform(lambda x: x.rolling(3, min_periods=2).mean())
+                    )
+                    base_sorted["Roll_Revenue"] = (
+                        base_sorted.groupby("GradeStr")["Revenue"]
+                        .transform(lambda x: x.rolling(3, min_periods=2).mean())
+                    )
+                    base_sorted["Roll_Volume"] = (
+                        base_sorted.groupby("GradeStr")["Volume"]
+                        .transform(lambda x: x.rolling(3, min_periods=2).mean())
+                    )
+
+                    base_sorted["Price_vs_Roll_%"] = np.where(
+                        base_sorted["Roll_Avg_Price"] > 0,
+                        (base_sorted["Avg_Price"] - base_sorted["Roll_Avg_Price"]) / base_sorted["Roll_Avg_Price"],
+                        np.nan,
+                    )
+                    base_sorted["Revenue_vs_Roll_%"] = np.where(
+                        base_sorted["Roll_Revenue"] > 0,
+                        (base_sorted["Revenue"] - base_sorted["Roll_Revenue"]) / base_sorted["Roll_Revenue"],
+                        np.nan,
+                    )
+                    base_sorted["Volume_vs_Roll_%"] = np.where(
+                        base_sorted["Roll_Volume"] > 0,
+                        (base_sorted["Volume"] - base_sorted["Roll_Volume"]) / base_sorted["Roll_Volume"],
+                        np.nan,
+                    )
+
+                    base_sorted["Flag_PriceResistance"] = (
+                        (base_sorted["Price_vs_Roll_%"] >= 0.05) &
+                        (base_sorted["Revenue_vs_Roll_%"] <= -0.10) &
+                        (base_sorted["Volume_vs_Roll_%"] <= -0.10)
+                    )
+
+                    base_sorted["Flag Reason"] = ""
+                    m = base_sorted["Flag_PriceResistance"]
+                    base_sorted.loc[m, "Flag Reason"] = (
+                        "Avg Price ↑ "
+                        + (base_sorted.loc[m, "Price_vs_Roll_%"] * 100).round(1).astype(str)
+                        + "%, Revenue ↓ "
+                        + (base_sorted.loc[m, "Revenue_vs_Roll_%"] * 100).round(1).astype(str)
+                        + "%, Volume ↓ "
+                        + (base_sorted.loc[m, "Volume_vs_Roll_%"] * 100).round(1).astype(str)
+                        + "% vs 3-period average (same grade)"
+                    )
+
+                    flags = base_sorted[base_sorted["Flag_PriceResistance"]].copy()
+                    flags["Trigger"] = "Price Resistance (High Confidence)"
+                    if not flags.empty:
+                        flags["MonthLabel"] = flags["MonthStart"].dt.strftime("%b %Y")
+
+                    # -----------------------------
+                    # Flag summary
+                    # -----------------------------
+                    if flags.empty:
+                        st.success("No high-confidence pricing resistance detected for the selected filter.")
                     else:
-                        base["Grade"] = base["Grade"].astype(str)
-                        base["PeriodLabel"] = pd.to_datetime(base["PeriodStart"]).dt.strftime(
-                            "Wk of %b %d, %Y" if grain == "Weekly" else "%b %Y"
+                        st.warning("High-confidence pricing resistance detected — review ⚠ markers and hover for details.")
+
+                    # -----------------------------
+                    # Add flag info into base (for bubble hover)
+                    # -----------------------------
+                    base["Flag Type"] = ""
+                    base["Flag Reason"] = ""
+                    if not flags.empty:
+                        trig_map = flags.set_index(["MonthStart", "GradeStr"])["Trigger"].to_dict()
+                        reas_map = flags.set_index(["MonthStart", "GradeStr"])["Flag Reason"].to_dict()
+
+                        base["Flag Type"] = base.apply(
+                            lambda r: trig_map.get((r["MonthStart"], str(r["GradeStr"])), ""),
+                            axis=1,
+                        )
+                        base["Flag Reason"] = base.apply(
+                            lambda r: reas_map.get((r["MonthStart"], str(r["GradeStr"])), ""),
+                            axis=1,
                         )
 
-                        grade_order = ["AAA", "AA", "A", "B"]
-                        present = [g for g in grade_order if g in base["Grade"].unique()]
-                        if present:
-                            base["Grade"] = pd.Categorical(base["Grade"], categories=present, ordered=True)
-                        base["GradeStr"] = base["Grade"].astype(str)
+                    # -----------------------------
+                    # Bubble chart (FILTERED)
+                    # -----------------------------
+                    fig = px.scatter(
+                        base,
+                        x="MonthStart",
+                        y="Revenue",
+                        color="GradeStr",
+                        size="Avg_Price",
+                        size_max=55,
+                        title="",
+                    )
 
-                        # Rolling baselines (window=3 periods; weekly = 3 weeks, monthly = 3 months)
-                        base_sorted = base.sort_values(["GradeStr", "PeriodStart"]).copy()
-                        base_sorted["Roll_Avg_Price"] = (
-                            base_sorted.groupby("GradeStr")["Avg_Price"]
-                            .transform(lambda x: x.rolling(3, min_periods=2).mean())
-                        )
-                        base_sorted["Roll_Revenue"] = (
-                            base_sorted.groupby("GradeStr")["Revenue"]
-                            .transform(lambda x: x.rolling(3, min_periods=2).mean())
-                        )
-                        base_sorted["Roll_Volume"] = (
-                            base_sorted.groupby("GradeStr")["Volume"]
-                            .transform(lambda x: x.rolling(3, min_periods=2).mean())
-                        )
+                    # -----------------------------
+                    # ✅ Total Revenue line (ALL SALES)
+                    # -----------------------------
+                    rev_line_all = (
+                        df_all.groupby("MonthStart", as_index=False)[revenue_col]
+                        .sum()
+                        .sort_values("MonthStart")
+                    )
+                    fig.add_scatter(
+                        x=rev_line_all["MonthStart"],
+                        y=rev_line_all[revenue_col],
+                        mode="lines+markers",
+                        name="Total Revenue (All Products)",
+                        line=dict(width=3),
+                        hovertemplate="<b>%{x|%b %Y}</b><br>Total Revenue: $%{y:,.0f}<extra></extra>",
+                    )
 
-                        base_sorted["Price_vs_Roll_%"] = np.where(
-                            base_sorted["Roll_Avg_Price"] > 0,
-                            (base_sorted["Avg_Price"] - base_sorted["Roll_Avg_Price"]) / base_sorted["Roll_Avg_Price"],
-                            np.nan,
-                        )
-                        base_sorted["Revenue_vs_Roll_%"] = np.where(
-                            base_sorted["Roll_Revenue"] > 0,
-                            (base_sorted["Revenue"] - base_sorted["Roll_Revenue"]) / base_sorted["Roll_Revenue"],
-                            np.nan,
-                        )
-                        base_sorted["Volume_vs_Roll_%"] = np.where(
-                            base_sorted["Roll_Volume"] > 0,
-                            (base_sorted["Volume"] - base_sorted["Roll_Volume"]) / base_sorted["Roll_Volume"],
-                            np.nan,
-                        )
+                    # -----------------------------
+                    # ✅ Total Volume line (ALL SALES) — secondary axis
+                    # -----------------------------
+                    vol_line_all = (
+                        df_all.groupby("MonthStart", as_index=False)
+                        .size()
+                        .rename(columns={"size": "Volume"})
+                        .sort_values("MonthStart")
+                    )
+                    fig.add_scatter(
+                        x=vol_line_all["MonthStart"],
+                        y=vol_line_all["Volume"],
+                        mode="lines+markers",
+                        name="Total Volume (All Products)",
+                        line=dict(width=2, dash="dot"),
+                        yaxis="y2",
+                        hovertemplate="<b>%{x|%b %Y}</b><br>Total Volume: %{y:,.0f} txns<extra></extra>",
+                    )
 
-                        base_sorted["Flag_PriceResistance"] = (
-                            (base_sorted["Price_vs_Roll_%"] >= 0.05) &
-                            (base_sorted["Revenue_vs_Roll_%"] <= -0.10) &
-                            (base_sorted["Volume_vs_Roll_%"] <= -0.10)
-                        )
-
-                        base_sorted["Flag Reason"] = ""
-                        m = base_sorted["Flag_PriceResistance"]
-                        base_sorted.loc[m, "Flag Reason"] = (
-                            "Avg Price ↑ "
-                            + (base_sorted.loc[m, "Price_vs_Roll_%"] * 100).round(1).astype(str)
-                            + "%, Revenue ↓ "
-                            + (base_sorted.loc[m, "Revenue_vs_Roll_%"] * 100).round(1).astype(str)
-                            + "%, Volume ↓ "
-                            + (base_sorted.loc[m, "Volume_vs_Roll_%"] * 100).round(1).astype(str)
-                            + f"% vs rolling 3-{PERIOD_NAME.lower()} average (same grade)"
-                        )
-
-                        flags = base_sorted[base_sorted["Flag_PriceResistance"]].copy()
-                        flags["Trigger"] = "Price Resistance (High Confidence)"
-                        if not flags.empty:
-                            flags["PeriodLabel"] = pd.to_datetime(flags["PeriodStart"]).dt.strftime(
-                                "Wk of %b %d, %Y" if grain == "Weekly" else "%b %Y"
-                            )
-
-                        if flags.empty:
-                            st.success("No high-confidence pricing resistance detected for the selected filter.")
-                        else:
-                            st.warning("High-confidence pricing resistance detected — review ⚠ markers and hover for details.")
-
-                        # Add flag info back into base (for bubble hover)
-                        base["Flag Type"] = ""
-                        base["Flag Reason"] = ""
-                        if not flags.empty:
-                            trig_map = flags.set_index(["PeriodStart", "GradeStr"])["Trigger"].to_dict()
-                            reas_map = flags.set_index(["PeriodStart", "GradeStr"])["Flag Reason"].to_dict()
-
-                            base["Flag Type"] = base.apply(
-                                lambda r: trig_map.get((r["PeriodStart"], str(r["GradeStr"])), ""),
-                                axis=1,
-                            )
-                            base["Flag Reason"] = base.apply(
-                                lambda r: reas_map.get((r["PeriodStart"], str(r["GradeStr"])), ""),
-                                axis=1,
-                            )
-
-                        # Bubble chart
-                        fig = px.scatter(
-                            base,
-                            x="PeriodStart",
-                            y="Revenue",
-                            color="GradeStr",
-                            size="Avg_Price",
-                            size_max=55,
-                            title="",
-                        )
-
-                        # Revenue line (total across grades)
-                        rev_line = (
-                            base.groupby("PeriodStart", as_index=False)["Revenue"]
-                            .sum()
-                            .sort_values("PeriodStart")
-                        )
+                    # -----------------------------
+                    # Flag markers (FILTERED) — hover shows ONLY flag type + reason
+                    # -----------------------------
+                    if not flags.empty:
                         fig.add_scatter(
-                            x=rev_line["PeriodStart"],
-                            y=rev_line["Revenue"],
-                            mode="lines+markers",
-                            name="Total Revenue Trend",
-                            line=dict(width=3),
-                            hovertemplate="<b>%{x|%b %d, %Y}</b><br>Total Revenue: $%{y:,.0f}<extra></extra>",
+                            x=flags["MonthStart"],
+                            y=flags["Revenue"],
+                            mode="markers",
+                            name="⚠ Flagged",
+                            marker=dict(size=14, symbol="x"),
+                            customdata=np.column_stack([
+                                flags["GradeStr"].astype(str),
+                                flags["Flag Reason"].astype(str),
+                                flags["Trigger"].astype(str),
+                            ]),
+                            hovertemplate=(
+                                "<b>%{x|%b %Y}</b><br>"
+                                "Grade: %{customdata[0]}<br>"
+                                "<b>Flag Type:</b> %{customdata[2]}<br>"
+                                "<b>Flag Reason:</b> %{customdata[1]}"
+                                "<extra></extra>"
+                            ),
                         )
 
-                        # Flag markers
-                        if not flags.empty:
-                            fig.add_scatter(
-                                x=flags["PeriodStart"],
-                                y=flags["Revenue"],
-                                mode="markers",
-                                name="⚠ Flagged",
-                                marker=dict(size=14, symbol="x"),
-                                customdata=np.column_stack([
-                                    flags["GradeStr"].astype(str),
-                                    flags["Flag Reason"].astype(str),
-                                    flags["Trigger"].astype(str),
-                                ]),
-                                hovertemplate=(
-                                    "<b>%{x|%b %d, %Y}</b><br>"
-                                    "Grade: %{customdata[0]}<br>"
-                                    "<b>Flag Type:</b> %{customdata[2]}<br>"
-                                    "<b>Flag Reason:</b> %{customdata[1]}"
-                                    "<extra></extra>"
-                                ),
+                    # -----------------------------
+                    # Layout formatting + y2 axis
+                    # -----------------------------
+                    fig.update_layout(
+                        xaxis_title="Month-Year",
+                        yaxis_title="Revenue (CAD)",
+                        legend_title_text="Grade",
+                        hovermode="closest",
+                        yaxis2=dict(
+                            title="Volume (Transactions)",
+                            overlaying="y",
+                            side="right",
+                            showgrid=False,
+                        ),
+                    )
+                    fig.update_xaxes(type="date", tickformat="%b %Y", dtick="M1")
+                    fig.update_yaxes(tickprefix="$", separatethousands=True)
+
+                    # -----------------------------
+                    # style_fig (may reset hovertemplates)
+                    # -----------------------------
+                    fig = style_fig(fig, height=600)
+
+                    # -----------------------------
+                    # ✅ FORCE bubble hover AFTER style_fig
+                    # Show Flag Type + Flag Reason ONLY when flagged (blank otherwise)
+                    # -----------------------------
+                    base_plot = base.copy()
+                    base_plot["GradeStr"] = base_plot["GradeStr"].astype(str)
+
+                    flag_type = base_plot["Flag Type"].astype(str).fillna("")
+                    flag_reason = base_plot["Flag Reason"].astype(str).fillna("")
+
+                    flag_block_type = np.where(flag_type != "", "<b>Flag Type:</b> " + flag_type + "<br>", "")
+                    flag_block_reason = np.where(flag_reason != "", "<b>Flag Reason:</b> " + flag_reason, "")
+
+                    # customdata: [Volume, FlagTypeBlock, FlagReasonBlock, Avg_Price]
+                    base_cd = np.column_stack([
+                        base_plot["Volume"].astype(float),
+                        flag_block_type,
+                        flag_block_reason,
+                        base_plot["Avg_Price"].astype(float),
+                    ])
+
+                    for tr in fig.data:
+                        # only bubble traces (exclude flagged X markers and the lines)
+                        if getattr(tr, "mode", "") == "markers" and tr.name not in ["⚠ Flagged"]:
+                            grade_name = str(tr.name)
+                            mask = (base_plot["GradeStr"] == grade_name)
+
+                            tr.customdata = base_cd[mask.values]
+                            tr.hovertemplate = (
+                                "<b>%{x|%b %Y}</b><br>"
+                                f"Grade: {grade_name}<br>"
+                                "Revenue: $%{y:,.0f}<br>"
+                                "Avg Price: $%{customdata[3]:,.2f}<br>"
+                                "Volume (txn): %{customdata[0]:,.0f}"
+                                "<br><br>"
+                                "%{customdata[1]}%{customdata[2]}"
+                                "<extra></extra>"
                             )
 
-                        fig.update_layout(
-                            xaxis_title=f"{PERIOD_NAME} (Date)",
-                            yaxis_title="Revenue (CAD)",
-                            legend_title_text="Grade",
-                            hovermode="closest",
-                        )
-                        fig.update_xaxes(type="date", tickformat=X_TICKFORMAT, dtick=X_DTICK)
-                        fig.update_yaxes(tickprefix="$", separatethousands=True)
+                    # ✅ Re-apply line hovers AFTER style_fig (defensive)
+                    for tr in fig.data:
+                        if tr.name == "Total Revenue (All Products)":
+                            tr.hovertemplate = "<b>%{x|%b %Y}</b><br>Total Revenue: $%{y:,.0f}<extra></extra>"
+                        if tr.name == "Total Volume (All Products)":
+                            tr.hovertemplate = "<b>%{x|%b %Y}</b><br>Total Volume: %{y:,.0f} txns<extra></extra>"
 
-                        # Style first
-                        fig = style_fig(fig, height=600)
-
-                        # ✅ Force bubble hover AFTER style_fig (flag fields only appear when flagged)
-                        base_plot = base.copy()
-                        base_plot["GradeStr"] = base_plot["GradeStr"].astype(str)
-
-                        flag_type = base_plot["Flag Type"].astype(str).fillna("")
-                        flag_reason = base_plot["Flag Reason"].astype(str).fillna("")
-                        flag_block_type = np.where(flag_type != "", "<b>Flag Type:</b> " + flag_type + "<br>", "")
-                        flag_block_reason = np.where(flag_reason != "", "<b>Flag Reason:</b> " + flag_reason, "")
-
-                        # customdata: [Volume, FlagTypeBlock, FlagReasonBlock, Avg_Price]
-                        base_cd = np.column_stack([
-                            base_plot["Volume"].astype(float),
-                            flag_block_type,
-                            flag_block_reason,
-                            base_plot["Avg_Price"].astype(float),
-                        ])
-
-                        for tr in fig.data:
-                            if getattr(tr, "mode", "") == "markers" and tr.name not in ["⚠ Flagged"]:
-                                grade_name = str(tr.name)
-                                mask = (base_plot["GradeStr"] == grade_name)
-                                tr.customdata = base_cd[mask.values]
-                                tr.hovertemplate = (
-                                    "<b>%{x|%b %d, %Y}</b><br>"
-                                    f"Grade: {grade_name}<br>"
-                                    "Revenue: $%{y:,.0f}<br>"
-                                    "Avg Price: $%{customdata[3]:,.2f}<br>"
-                                    "Volume (txn): %{customdata[0]:,.0f}"
-                                    "<br><br>"
-                                    "%{customdata[1]}%{customdata[2]}"
-                                    "<extra></extra>"
-                                )
-
-                        # Keep revenue line on top
-                        names = [tr.name for tr in fig.data]
-                        if "Total Revenue Trend" in names:
-                            idx = names.index("Total Revenue Trend")
-                            fig.data = tuple(list(fig.data[:idx]) + list(fig.data[idx+1:]) + [fig.data[idx]])
-
-                        st.plotly_chart(
-                            fig,
-                            use_container_width=True,
-                            key=pkey("seasonality_elasticity_bubble_line_flagged_reason_hiconf"),
-                        )
+                    st.plotly_chart(
+                        fig,
+                        use_container_width=True,
+                        key=pkey("seasonality_tab1_dual_scope_lines"),
+                    )
 
     # =========================================================
     # SUBTAB 2 — Fragile Periods (PERCENT + SEASONALITY + DROPDOWN MODE)
@@ -5203,7 +5279,6 @@ if page == 'Seasonality':
                         )
 
                     st.plotly_chart(fig, use_container_width=True, key=pkey("camp_heatmap_ranked_hover_score"))
-
 
 
 # -----------------------------
