@@ -277,9 +277,9 @@ def _figure_label(fig, idx: int, used=None) -> str:
 
 
 
-def _fig_to_compact_csv(fig, max_rows: int = 1200) -> str:
+def _fig_to_compact_df(fig, max_rows: int = 1200) -> "pd.DataFrame":
     """
-    Builds a compact CSV from what is actually plotted (trace-level x/y),
+    Builds a compact DataFrame from what is actually plotted (trace-level x/y),
     so the AI answers are grounded in the on-screen chart.
     """
     import pandas as pd
@@ -291,7 +291,11 @@ def _fig_to_compact_csv(fig, max_rows: int = 1200) -> str:
         traces = []
 
     for tr in traces:
-        name = getattr(tr, "name", None) or getattr(tr, "legendgroup", None) or getattr(tr, "type", "trace")
+        name = (
+            getattr(tr, "name", None)
+            or getattr(tr, "legendgroup", None)
+            or getattr(tr, "type", "trace")
+        )
         ttype = getattr(tr, "type", None)
 
         # Pie-like traces
@@ -299,7 +303,7 @@ def _fig_to_compact_csv(fig, max_rows: int = 1200) -> str:
         values = getattr(tr, "values", None)
         if labels is not None and values is not None:
             for lab, val in zip(list(labels)[:], list(values)[:]):
-                rows.append({"trace": name, "series": str(ttype), "label": lab, "value": val})
+                rows.append({"trace": str(name), "series": str(ttype), "label": lab, "value": val})
                 if len(rows) >= max_rows:
                     break
             if len(rows) >= max_rows:
@@ -310,39 +314,296 @@ def _fig_to_compact_csv(fig, max_rows: int = 1200) -> str:
         x = getattr(tr, "x", None)
         y = getattr(tr, "y", None)
 
-        # Histogram sometimes has x only; keep x as value
+        # Some traces can carry only x (e.g., histogram when built from samples)
         if x is not None and y is None:
-            for xi in list(x)[:]:
-                rows.append({"trace": name, "series": str(ttype), "x": xi})
+            x_list = list(x) if hasattr(x, "__iter__") and not isinstance(x, (str, bytes)) else [x]
+            for xi in x_list[:]:
+                rows.append({"trace": str(name), "series": str(ttype), "x": xi})
                 if len(rows) >= max_rows:
                     break
             if len(rows) >= max_rows:
                 break
             continue
 
-        if x is None or y is None:
+        if x is None and y is None:
             continue
 
-        # Safely iterate
-        try:
-            xs = list(x)
-            ys = list(y)
-        except Exception:
-            continue
+        x_list = list(x) if hasattr(x, "__iter__") and not isinstance(x, (str, bytes)) else [x]
+        y_list = list(y) if hasattr(y, "__iter__") and not isinstance(y, (str, bytes)) else [y]
 
-        n = min(len(xs), len(ys))
+        n = min(len(x_list), len(y_list))
         for i in range(n):
-            rows.append({"trace": name, "series": str(ttype), "x": xs[i], "y": ys[i]})
+            rows.append({"trace": str(name), "series": str(ttype), "x": x_list[i], "y": y_list[i]})
             if len(rows) >= max_rows:
                 break
         if len(rows) >= max_rows:
             break
 
-    if not rows:
-        return "trace,series\n(no plottable trace data)\n"
-
     dfc = pd.DataFrame(rows)
-    return dfc.to_csv(index=False)
+    if not dfc.empty:
+        dfc = dfc.loc[:, ~dfc.columns.duplicated()]
+    return dfc
+
+
+def _series_stats(values) -> dict:
+    """Robust summary stats for numeric series (used for violin/box/hist aggregation)."""
+    import pandas as pd
+    import numpy as np
+
+    s = pd.to_numeric(pd.Series(list(values)), errors="coerce").dropna()
+    if s.empty:
+        return {"n": 0, "mean": np.nan, "median": np.nan, "p25": np.nan, "p75": np.nan, "min": np.nan, "max": np.nan, "std": np.nan}
+    return {
+        "n": int(len(s)),
+        "mean": float(s.mean()),
+        "median": float(s.median()),
+        "p25": float(s.quantile(0.25)),
+        "p75": float(s.quantile(0.75)),
+        "min": float(s.min()),
+        "max": float(s.max()),
+        "std": float(s.std(ddof=1)) if len(s) > 1 else 0.0,
+    }
+
+
+def _try_parse_datetime(x_list):
+    import pandas as pd
+    if not x_list:
+        return None
+    try:
+        dt = pd.to_datetime(pd.Series(x_list), errors="coerce", utc=False)
+        ok = dt.notna().mean()
+        if ok >= 0.8:
+            return dt
+    except Exception:
+        pass
+    return None
+
+
+def _aggregate_fig_context(fig, max_bins: int = 40) -> "pd.DataFrame":
+    """
+    Produce a smaller, *aggregated* DataFrame representation of a figure, intended
+    specifically for LLM context (avoids payload/token blowups for point-heavy traces).
+    """
+    import pandas as pd
+    import numpy as np
+
+    out_rows = []
+    try:
+        traces = list(fig.data) if hasattr(fig, "data") else []
+    except Exception:
+        traces = []
+
+    for tr in traces:
+        name = (
+            getattr(tr, "name", None)
+            or getattr(tr, "legendgroup", None)
+            or getattr(tr, "type", "trace")
+        )
+        ttype = str(getattr(tr, "type", "") or "")
+
+        # Violin/Box: summarize distribution per trace
+        if ttype in {"violin", "box"}:
+            vals = getattr(tr, "y", None)
+            if vals is None:
+                vals = getattr(tr, "x", None)
+            vals_list = list(vals) if vals is not None and hasattr(vals, "__iter__") and not isinstance(vals, (str, bytes)) else []
+            stats = _series_stats(vals_list)
+            out_rows.append({"trace": str(name), "series": ttype, **stats})
+            continue
+
+        # Pie-like traces (already aggregated)
+        labels = getattr(tr, "labels", None)
+        values = getattr(tr, "values", None)
+        if labels is not None and values is not None:
+            for lab, val in zip(list(labels)[:max_bins], list(values)[:max_bins]):
+                out_rows.append({"trace": str(name), "series": ttype or "pie", "label": lab, "value": val})
+            continue
+
+        # x/y traces
+        x = getattr(tr, "x", None)
+        y = getattr(tr, "y", None)
+
+        # Histogram-like (x only samples)
+        if (ttype == "histogram") and (x is not None) and (y is None):
+            x_list = list(x) if hasattr(x, "__iter__") and not isinstance(x, (str, bytes)) else []
+            if x_list:
+                s = pd.to_numeric(pd.Series(x_list), errors="coerce").dropna()
+                if not s.empty:
+                    # bin counts
+                    try:
+                        bins = min(max_bins, max(10, int(np.sqrt(len(s)))))
+                        counts, edges = np.histogram(s.values, bins=bins)
+                        for i in range(len(counts)):
+                            out_rows.append({
+                                "trace": str(name),
+                                "series": "histogram",
+                                "bin_start": float(edges[i]),
+                                "bin_end": float(edges[i + 1]),
+                                "count": int(counts[i]),
+                            })
+                    except Exception:
+                        # fallback to summary stats only
+                        stats = _series_stats(s.values)
+                        out_rows.append({"trace": str(name), "series": "histogram_summary", **stats})
+            continue
+
+        if x is None or y is None:
+            continue
+
+        x_list = list(x) if hasattr(x, "__iter__") and not isinstance(x, (str, bytes)) else [x]
+        y_list = list(y) if hasattr(y, "__iter__") and not isinstance(y, (str, bytes)) else [y]
+        n = min(len(x_list), len(y_list))
+        if n == 0:
+            continue
+        x_list = x_list[:n]
+        y_list = y_list[:n]
+
+        # Attempt numeric y
+        y_num = pd.to_numeric(pd.Series(y_list), errors="coerce")
+        if y_num.notna().sum() < max(3, int(0.5 * n)):
+            # Non-numeric or too sparse: fall back to top categories (counts)
+            xs = pd.Series(x_list).astype(str).fillna("Unknown")
+            top = xs.value_counts().head(max_bins)
+            for lab, cnt in top.items():
+                out_rows.append({"trace": str(name), "series": ttype or "xy", "group": lab, "count": int(cnt)})
+            continue
+
+        # If x is datetime-ish, aggregate by week/month depending on span
+        dt = _try_parse_datetime(x_list)
+        if dt is not None:
+            tmp = pd.DataFrame({"dt": dt, "y": y_num}).dropna(subset=["dt", "y"])
+            if tmp.empty:
+                continue
+            span_days = (tmp["dt"].max() - tmp["dt"].min()).days if pd.notna(tmp["dt"].max()) and pd.notna(tmp["dt"].min()) else 0
+            if span_days > 365:
+                period = tmp["dt"].dt.to_period("M").dt.to_timestamp()
+                period_label = "month"
+            elif span_days > 90:
+                period = tmp["dt"].dt.to_period("W").apply(lambda r: r.start_time)
+                period_label = "week"
+            else:
+                period = tmp["dt"].dt.to_period("D").dt.to_timestamp()
+                period_label = "day"
+            tmp["period"] = period
+            g = tmp.groupby("period")["y"].agg(["count", "mean", "median", "min", "max", "sum"]).reset_index()
+            g = g.sort_values("period").head(max_bins)
+            for _, r in g.iterrows():
+                out_rows.append({
+                    "trace": str(name),
+                    "series": ttype or "xy",
+                    "period": r["period"],
+                    "period_grain": period_label,
+                    "n": int(r["count"]),
+                    "y_sum": float(r["sum"]),
+                    "y_mean": float(r["mean"]),
+                    "y_median": float(r["median"]),
+                    "y_min": float(r["min"]),
+                    "y_max": float(r["max"]),
+                })
+            continue
+
+        # Otherwise, aggregate by categorical x (top-k) or numeric bins
+        x_ser = pd.Series(x_list)
+        x_num = pd.to_numeric(x_ser, errors="coerce")
+        if x_num.notna().sum() >= max(3, int(0.5 * n)):
+            tmp = pd.DataFrame({"x": x_num, "y": y_num}).dropna()
+            if tmp.empty:
+                continue
+            try:
+                bins = min(max_bins, max(10, int(np.sqrt(len(tmp)))))
+                tmp["bin"] = pd.cut(tmp["x"], bins=bins, duplicates="drop")
+                g = tmp.groupby("bin")["y"].agg(["count", "mean", "median", "min", "max", "sum"]).reset_index()
+                for _, r in g.head(max_bins).iterrows():
+                    b = r["bin"]
+                    out_rows.append({
+                        "trace": str(name),
+                        "series": ttype or "xy",
+                        "bin_start": float(getattr(b, "left", np.nan)),
+                        "bin_end": float(getattr(b, "right", np.nan)),
+                        "n": int(r["count"]),
+                        "y_sum": float(r["sum"]),
+                        "y_mean": float(r["mean"]),
+                        "y_median": float(r["median"]),
+                        "y_min": float(r["min"]),
+                        "y_max": float(r["max"]),
+                    })
+            except Exception:
+                stats = _series_stats(tmp["y"].values)
+                out_rows.append({"trace": str(name), "series": (ttype or "xy") + "_summary", **stats})
+        else:
+            tmp = pd.DataFrame({"x": x_ser.astype(str).fillna("Unknown"), "y": y_num}).dropna(subset=["y"])
+            if tmp.empty:
+                continue
+            g = (
+                tmp.groupby("x")["y"]
+                .agg(["count", "mean", "median", "min", "max", "sum"])
+                .reset_index()
+                .rename(columns={"x": "group"})
+                .sort_values("sum", ascending=False)
+                .head(max_bins)
+            )
+            for _, r in g.iterrows():
+                out_rows.append({
+                    "trace": str(name),
+                    "series": ttype or "xy",
+                    "group": r["group"],
+                    "n": int(r["count"]),
+                    "y_sum": float(r["sum"]),
+                    "y_mean": float(r["mean"]),
+                    "y_median": float(r["median"]),
+                    "y_min": float(r["min"]),
+                    "y_max": float(r["max"]),
+                })
+
+    df_out = pd.DataFrame(out_rows)
+    if not df_out.empty:
+        df_out = df_out.loc[:, ~df_out.columns.duplicated()]
+    return df_out
+
+
+def _compact_context_for_fig(fig, max_rows: int = 1200, max_chars: int = 120000):
+    """
+    Returns (context_df, meta) where context_df is what we will send to Groq.
+    If the raw compact CSV is still too large, we auto-aggregate the plotted values
+    into a much smaller summary table (especially important for violin/box/point-heavy charts).
+    """
+    import pandas as pd
+
+    # Prefer aggregation for distribution traces (violin/box), even if raw would fit
+    try:
+        trace_types = {str(getattr(t, "type", "") or "") for t in (list(fig.data) if hasattr(fig, "data") else [])}
+    except Exception:
+        trace_types = set()
+
+    force_agg = bool(trace_types & {"violin", "box"})
+    raw_df = _fig_to_compact_df(fig, max_rows=max_rows)
+    raw_csv = raw_df.to_csv(index=False) if isinstance(raw_df, pd.DataFrame) else ""
+
+    if (not force_agg) and (len(raw_csv) <= max_chars) and (len(raw_df) <= max_rows):
+        return raw_df, {"source": "chart", "mode": "raw", "note": ""}
+
+    agg_df = _aggregate_fig_context(fig, max_bins=40)
+
+    # If aggregation still produced nothing (rare), fall back to whatever raw we had
+    if agg_df is None or getattr(agg_df, "empty", True):
+        return raw_df, {"source": "chart", "mode": "raw", "note": "(fallback) raw chart values"}
+
+    agg_csv = agg_df.to_csv(index=False)
+    if len(agg_csv) > max_chars:
+        # Hard cap rows as a last resort
+        agg_df = agg_df.head(250).copy()
+
+    note = "Auto-aggregated chart values to avoid large payloads (common for violin/box or dense point charts)."
+    return agg_df, {"source": "chart", "mode": "auto-aggregated", "note": note}
+
+
+def _fig_to_compact_csv(fig, max_rows: int = 1200) -> str:
+    """Backward-compatible wrapper (returns CSV)."""
+    import pandas as pd
+    dfc, _meta = _compact_context_for_fig(fig, max_rows=max_rows)
+    if isinstance(dfc, pd.DataFrame):
+        return dfc.to_csv(index=False)
+    return ""
 
 
 # --- Capture charts rendered on the current page ---
@@ -828,6 +1089,7 @@ _main_pages = [
 page = st.sidebar.radio("Navigate", _main_pages, index=0, key="nav_main")
 st.session_state["_ai_figs"] = []  # reset captured charts each rerun
 st.session_state["_ai_override_df"] = {}  # per-figure data overrides (reset each rerun)
+st.session_state["_ai_override_meta"] = {}  # per-figure override metadata (reset each rerun)
 st.sidebar.markdown("---")
 
 
@@ -3073,6 +3335,7 @@ if page == 'Geography & Channels':
                     .rename(columns={"#": "Rank"})
                 )
                 st.session_state.setdefault("_ai_override_df", {})[id(fig)] = _ai_tbl
+                st.session_state.setdefault("_ai_override_meta", {})[id(fig)] = {"source": "table", "mode": "table-override", "note": "Using the Top markets table below the map as Groq context."}
             except Exception:
                 pass
 
@@ -6652,17 +6915,27 @@ with st.expander("🤖 Ask AI about the chart on this page (Groq)", expanded=Fal
 
         # Build compact CSV context from selected figure
         sel_fig = figs[pick]
-        # Build compact CSV context from selected figure (with optional per-figure override)
-        _override = (st.session_state.get("_ai_override_df") or {}).get(id(sel_fig))
-        if isinstance(_override, pd.DataFrame) and not _override.empty:
-            context_csv = _override.to_csv(index=False)
-            _context_source = "table"
-        else:
-            context_csv = _fig_to_compact_csv(sel_fig, max_rows=1200)
-            _context_source = "chart"
 
+        # Prefer per-figure override tables (e.g., map → top markets table).
+        _override = (st.session_state.get("_ai_override_df") or {}).get(id(sel_fig))
+        _meta = (st.session_state.get("_ai_override_meta") or {}).get(id(sel_fig)) or {}
+
+        if isinstance(_override, pd.DataFrame) and not _override.empty:
+            context_df = _override.copy()
+            _context_source = _meta.get("source", "table")
+            _context_mode = _meta.get("mode", "table-override")
+            _context_note = _meta.get("note", "")
+        else:
+            context_df, _m = _compact_context_for_fig(sel_fig, max_rows=1200, max_chars=120000)
+            _context_source = _m.get("source", "chart")
+            _context_mode = _m.get("mode", "raw")
+            _context_note = _m.get("note", "")
+
+        context_csv = context_df.to_csv(index=False) if isinstance(context_df, pd.DataFrame) else ""
         with st.expander("Show compact CSV sent to Groq", expanded=False):
-            st.caption(f"Context source: **{_context_source}** (table override used when available).")
+            st.caption(f"Context source: **{_context_source}** | Mode: **{_context_mode}**")
+            if _context_note:
+                st.caption(_context_note)
             # Render the CSV context as a table for readability
             try:
                 import io as _io
