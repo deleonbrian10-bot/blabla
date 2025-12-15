@@ -1377,6 +1377,39 @@ if page == 'Overview':
             fig.add_trace(go.Scatter(x=ts[xcol], y=ts["Rolling"], mode="lines", name="3-period avg"))
             fig.update_layout(title=f"{metric_label} Trend", xaxis_title="", yaxis_title=metric_label)
             fig = style_fig(fig, height=420)
+            # --- Groq AI payload safety override for this trend chart ---
+            # Daily mode can explode in size if your 'Date' column includes timestamps (many unique values).
+            try:
+                if gran == "Daily":
+                    _tmp = f[["Date", metric_col]].dropna().copy()
+                    _tmp["Date"] = pd.to_datetime(_tmp["Date"], errors="coerce").dt.floor("D")
+                    _ts_ai = _tmp.groupby("Date", as_index=False)[metric_col].sum().sort_values("Date")
+                    _ts_ai["Rolling_3"] = _ts_ai[metric_col].rolling(3, min_periods=1).mean()
+
+                    # Hard cap for AI context (keep the trend; avoid huge payloads)
+                    if len(_ts_ai) > 900:
+                        _step = int(math.ceil(len(_ts_ai) / 900))
+                        _ts_ai = _ts_ai.iloc[::max(_step, 1)].copy().reset_index(drop=True)
+
+                    st.session_state["_ai_override_df"][id(fig)] = _ts_ai.rename(columns={metric_col: metric_label})
+                    st.session_state["_ai_override_meta"][id(fig)] = {
+                        "source": "table",
+                        "mode": "daily-agg",
+                        "note": "AI uses daily-aggregated values (Date floored to day) for this trend chart to prevent large CSV payloads.",
+                    }
+                else:
+                    # Weekly/Monthly are already aggregated; pass the underlying table used to build the chart.
+                    _ts_ai = ts[[xcol, metric_col, "Rolling"]].copy()
+                    _ts_ai = _ts_ai.rename(columns={xcol: gran, metric_col: metric_label, "Rolling": "Rolling_3"})
+                    st.session_state["_ai_override_df"][id(fig)] = _ts_ai
+                    st.session_state["_ai_override_meta"][id(fig)] = {
+                        "source": "table",
+                        "mode": "ts-agg",
+                        "note": "AI uses the same aggregated timeseries table used to build this chart.",
+                    }
+            except Exception:
+                pass
+
             st.plotly_chart(fig, use_container_width=True, key=pkey("ov_trend"))
 
     # Pareto: Top countries share
