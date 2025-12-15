@@ -15,6 +15,131 @@ import plotly.graph_objects as go
 import plotly.io as pio
 from itertools import count
 import matplotlib.pyplot as plt
+from plotly.subplots import make_subplots
+import plotly.graph_objects as go
+
+# =========================================================
+# Help Modal (Fragile Months)
+# Place this ONCE near the top of your file (after imports)
+# =========================================================
+@st.dialog("Revenue Fragility — Interpretation Guide")
+def show_fragility_help():
+    st.markdown("""
+This view measures **monthly revenue dependency risk** by showing what share of revenue relies on a **critical product type**, alongside a **Seasonality Index** that indicates whether the month is above or below a normal revenue level.
+
+----
+**Insight — What to look for**
+
+- Months with a **high At Risk %** are heavily dependent on one product type.  
+- When this dependency coincides with a **below-average month** (Seasonality Index < 1.0), the month is flagged **⚠ Seasonal Risk**, indicating **low resilience if that product underperforms**.
+
+
+---
+
+**Recommendation — How to act on this**
+
+Prioritize action for **⚠ Seasonal Risk** months:
+- Reduce reliance on the critical product through **mix diversification**.
+- Prepare **alternate products, inventory buffers, or promotions** ahead of time.
+- Repeated flags under *Overall Critical* suggest a **structural dependency**; flags under *Seasonal Critical* suggest a **seasonal planning issue**.
+
+---
+
+**Seasonal Risk Rule**  
+A month is flagged when:
+- **At Risk share ≥ selected threshold**, and  
+- **Seasonality Index < 1.0** (below-average month)
+""")
+
+@st.dialog("Price Elasticity — Interpretation Guide")
+def show_seasonality_help():
+        
+
+        st.markdown("""
+This view provides an **executive-level check on pricing effectiveness across seasonal cycles**.
+
+It summarizes performance by **Month × Grade** (after applying the Product Type filter):
+- **X-axis:** Month-Year (seasonality timing)
+- **Y-axis:** Revenue (CAD)
+- **Bubble size:** Average transaction price (Avg Price)
+- **Color:** Grade
+- **Line:** Total monthly revenue trend (all grades combined)
+
+Each bubble aggregates **all product types included by the current filter** for that grade and month.
+
+----
+**Insight — What to look for**
+
+Use this view to quickly identify:
+- **Seasonal revenue peaks and slowdowns** (revenue trend line)
+- Months where pricing was **more aggressive** (larger bubbles)
+- Differences in **price sensitivity by grade**
+- **High-confidence price-resistance alerts** (⚠ markers)
+
+A **⚠ Flag** indicates a month where the data suggests customers may have pushed back on pricing:
+- Average price rose meaningfully, while both revenue and demand weakened.
+
+---
+
+**Recommendation — How to act on this**
+
+Focus attention on **⚠ flagged months**, especially when bubbles are large and revenue trends are softening.
+
+**High-confidence flag definition (per Grade, compared to a 3-month rolling baseline):**
+- **Avg Price ≥ +5%**
+- **Revenue ≤ −10%**
+- **Volume (transaction count) ≤ −10%**
+
+These alerts are designed as an **early-warning system**:
+- Review pricing actions taken in flagged periods before repeating them in future seasonal cycles.
+- Consider targeted tactics (bundles, promotions, mix shifts) if the same grade is flagged repeatedly.
+- If multiple grades are flagged in the same month, assess whether the driver is **broader seasonal demand softness** rather than pricing alone.
+""")
+
+@st.dialog("Seasonal Campaign Opportunities — Interpretation Guide")
+def show_opportunity_help():
+    st.markdown(
+        """
+This heatmap isolates **below-average revenue months** (as defined by the **Seasonality Index** threshold) and shows
+**which product types still capture demand** during those weaker periods.
+
+- **Columns:** slow months (Month–Year) selected from your criteria  
+- **Rows:** product types, **ranked** by **Opportunity Score**  
+- **Cell value:** either **Share of Month (%)** or **Revenue (CAD)**, based on your metric selection  
+- **Opportunity Score:** combines **consistency** (appears across slow months) and **average share** (importance within those months)
+
+---
+**Insight — What to look for**
+
+
+Use this view to identify product types that are **reliable performers when demand is soft**.
+
+- **Darker cells** indicate stronger contribution in a slow month  
+- **Top-ranked rows** are the most dependable campaign candidates  
+- If a product stays dark across multiple columns, it is a **repeatable lever** for seasonal stabilization  
+- If a product spikes only once, it may be **event-driven** rather than campaignable
+
+---
+
+**Recommendation — How to act on this**
+
+
+Prioritize campaign effort on the **top-ranked products**, especially those with:
+- **High Opportunity Score** (reliable across slow months)  
+- **Consistent presence** (appears in many slow months)  
+- **Meaningful share** (material contributor when revenue is weak)
+
+Suggested actions:
+- Build **bundles** around top-ranked products  
+- Run **targeted promotions** in the identified slow months  
+- Align **content and messaging** to products resilient in downturn periods  
+- Use this as a **campaign short-list**, then validate with inventory and margin constraints
+
+---
+**Interpretation note:** This is an **opportunity ranking**, not a forecast. It guides where campaigns are most likely to stabilize revenue during seasonal softness.
+"""
+    )
+
 
 # -----------------------------
 # Plotly + Streamlit Defaults
@@ -659,6 +784,7 @@ st.markdown("---")
     tab_ownership,
     tab_seasonality,
     tab_compliance,
+    tab_stats,
     tab_data,
 ) = st.tabs(
     [
@@ -671,6 +797,7 @@ st.markdown("---")
         "Ownership",
         "Seasonality",
         "Compliance",
+        "Stats", 
         "All Data",
     ]
 )
@@ -1291,8 +1418,9 @@ with tab_price:
 with tab_mix:
     st.header("🧩 Product Mix")
 
-    # Use filtered df if you have it (common in your app), otherwise use df
-    pm_df = f.copy() if "f" in locals() else df.copy()
+    # ✅ FIX: Directly use the filtered dataframe 'f' from master dashboard
+    # This ensures sidebar filters work properly
+    pm_df = f.copy()
 
     # ---- Safety: required columns + numeric cleanup ----
     for col in ["Price (CAD)", "Discount (CAD)"]:
@@ -1309,7 +1437,7 @@ with tab_mix:
             pm_df[col] = "Unknown"
         pm_df[col] = pm_df[col].fillna("Unknown")
 
-    # Optional fallback CSS (safe even if you already have these styles globally)
+    # Optional fallback CSS
     st.markdown(
         """
         <style>
@@ -1332,21 +1460,21 @@ with tab_mix:
         unsafe_allow_html=True,
     )
 
-    # Create sub-tabs for Product Mix section
+    # Create sub-tabs for Product Mix section (NO ICONS as requested)
     pm_tabs = st.tabs([
-        "📊 Overview",
-        "🗺️ Interactive Treemap",
-        "📈 Revenue Analysis",
-        "💰 Pricing Analysis",
-        "⚡ Efficiency Metrics",
-        "🎯 Strategic Insights"
+        "Overview",
+        "Interactive Treemap",
+        "Revenue Analysis",
+        "Pricing Analysis",
+        "Efficiency Metrics",
+        "Strategic Insights"
     ])
 
     # =====================================================
-    # TAB 1: OVERVIEW
+    # TAB 1: OVERVIEW (NO CHARTS - removed as requested)
     # =====================================================
     with pm_tabs[0]:
-        st.subheader("📊 Executive Summary")
+        st.subheader("Executive Summary")
 
         col1, col2, col3, col4 = st.columns(4)
 
@@ -1368,16 +1496,40 @@ with tab_mix:
 
         st.markdown("---")
 
-        # KEY FINDINGS
-        st.subheader("🔍 Key Findings")
+        # DYNAMIC KEY FINDINGS
+        st.subheader("Key Findings")
         st.markdown('<div class="insight-box">', unsafe_allow_html=True)
+        
+        # Determine pricing assessment (DYNAMIC)
+        if avg_disc < 1:
+            pricing_assessment = "exceptionally low"
+            pricing_quality = "exceptional"
+        elif avg_disc < 2:
+            pricing_assessment = "very low"
+            pricing_quality = "strong"
+        elif avg_disc < 3:
+            pricing_assessment = "low"
+            pricing_quality = "good"
+        else:
+            pricing_assessment = "moderate"
+            pricing_quality = "developing"
+        
+        # Determine market tier (DYNAMIC)
+        if avg_txn > 5000:
+            market_tier = "ultra-premium"
+        elif avg_txn > 2000:
+            market_tier = "premium"
+        elif avg_txn > 1000:
+            market_tier = "mid-tier premium"
+        else:
+            market_tier = "accessible"
+        
         st.markdown(
             f"""
             Total revenue of **${total_rev:,.0f} CAD** across **{total_sales:,} transactions**
-            with an average of **${avg_txn:,.2f}** per sale.
-
-            The discount rate of **{avg_disc:.2f}%** indicates strong pricing discipline and
-            premium positioning without needing heavy promotions.
+            with an average of **${avg_txn:,.2f}** per sale. The {pricing_assessment} discount rate of 
+            **{avg_disc:.2f}%** (vs. 5-15% industry average) demonstrates {pricing_quality} brand value and 
+            pricing power, positioning the business in the **{market_tier} market segment**.
             """,
             unsafe_allow_html=True
         )
@@ -1394,94 +1546,77 @@ with tab_mix:
         colL, colR = st.columns(2)
 
         with colL:
-            st.markdown("### 🏆 Top 3 Revenue Generators")
+            st.markdown("### Top 3 Revenue Generators")
             top3_revenue = product_stats.head(3)
             for _, row in top3_revenue.iterrows():
                 pct = (row["Total Revenue"] / total_rev * 100) if total_rev else 0
                 st.metric(row["Product Type"], f"${row['Total Revenue']:,.0f}", f"{pct:.1f}% of total")
 
-            st.markdown("### 📊 Top 3 Volume Leaders")
+            st.markdown("### Top 3 Volume Leaders")
             top3_volume = product_stats.sort_values("Sales Volume", ascending=False).head(3)
             for _, row in top3_volume.iterrows():
                 pct = (row["Sales Volume"] / total_sales * 100) if total_sales else 0
                 st.metric(row["Product Type"], f"{int(row['Sales Volume']):,} sales", f"{pct:.1f}% of volume")
 
         with colR:
-            st.markdown("### ⚠️ Bottom 3 Revenue Generators")
+            st.markdown("### Bottom 3 Revenue Generators")
             bottom3_revenue = product_stats.tail(3).sort_values("Total Revenue", ascending=True)
             for _, row in bottom3_revenue.iterrows():
                 pct = (row["Total Revenue"] / total_rev * 100) if total_rev else 0
                 st.metric(row["Product Type"], f"${row['Total Revenue']:,.0f}", f"{pct:.1f}% of total")
 
-            st.markdown("### 📉 Bottom 3 Volume Leaders")
+            st.markdown("### Bottom 3 Volume Leaders")
             bottom3_volume = product_stats.sort_values("Sales Volume", ascending=True).head(3)
             for _, row in bottom3_volume.iterrows():
                 pct = (row["Sales Volume"] / total_sales * 100) if total_sales else 0
                 st.metric(row["Product Type"], f"{int(row['Sales Volume']):,} sales", f"{pct:.1f}% of volume")
 
+        # DYNAMIC BUSINESS TAKEAWAYS
         st.markdown("---")
         st.markdown('<div class="recommendation-box">', unsafe_allow_html=True)
-        st.markdown(
-            """
-            **📊 Business Takeaways:**
-
-            Low discounting + strong average transaction value supports premium positioning.
-            Top revenue concentration can be a growth lever, but also creates portfolio dependency.
-            Bottom performers should be evaluated for margin contribution and strategic purpose.
-            """,
-            unsafe_allow_html=True,
-        )
+        st.markdown("**Business Takeaways:**\n\n")
+        
+        if len(product_stats) > 0:
+            top_product = product_stats.iloc[0]["Product Type"]
+            top_product_pct = (product_stats.iloc[0]["Total Revenue"] / total_rev * 100) if total_rev else 0
+            bottom_product = product_stats.iloc[-1]["Product Type"]
+            bottom_product_pct = (product_stats.iloc[-1]["Total Revenue"] / total_rev * 100) if total_rev else 0
+            
+            takeaways = []
+            
+            # Pricing takeaway (DYNAMIC)
+            if avg_disc < 2:
+                takeaways.append(f"The {pricing_assessment} discount rate of {avg_disc:.2f}% combined with ${avg_txn:,.0f} average transaction validates premium positioning. Current pricing strategy is highly effective - customers perceive significant value and pay full price willingly.")
+            else:
+                takeaways.append(f"The discount rate of {avg_disc:.2f}% combined with ${avg_txn:,.0f} average transaction indicates opportunity to strengthen pricing discipline and move toward premium positioning.")
+            
+            # Concentration takeaway (DYNAMIC)
+            if top_product_pct > 50:
+                takeaways.append(f"Critical concentration in {top_product} ({top_product_pct:.1f}% of revenue) presents significant portfolio dependency risk requiring immediate diversification strategy.")
+            elif top_product_pct > 40:
+                takeaways.append(f"High concentration in {top_product} ({top_product_pct:.1f}% of revenue) presents both opportunity (proven market success) and risk (portfolio dependency) requiring strategic balance.")
+            elif top_product_pct > 30:
+                takeaways.append(f"Moderate concentration in {top_product} ({top_product_pct:.1f}% of revenue) shows clear market leader while maintaining reasonable portfolio diversification.")
+            else:
+                takeaways.append(f"Well-balanced portfolio with {top_product} leading at {top_product_pct:.1f}% of revenue, indicating healthy diversification across product categories.")
+            
+            # Bottom performer takeaway (DYNAMIC)
+            if bottom_product_pct < 2:
+                takeaways.append(f"Bottom performers like {bottom_product} ({bottom_product_pct:.1f}% of revenue) require strategic evaluation for continuation or elimination based on strategic importance and margin contribution.")
+            else:
+                takeaways.append(f"Lower performers including {bottom_product} ({bottom_product_pct:.1f}% of revenue) contribute meaningful revenue and may serve strategic roles in customer acquisition or portfolio completeness.")
+            
+            st.markdown("\n\n".join(takeaways), unsafe_allow_html=True)
+        else:
+            st.markdown("No product data available in current filter selection.")
+        
         st.markdown("</div>", unsafe_allow_html=True)
 
-        # Revenue by Product Type
-        st.markdown("---")
-        st.subheader("💰 Revenue Distribution by Product Type")
-
-        revenue_by_type = (
-            pm_df.groupby("Product Type", as_index=False)["Price (CAD)"]
-            .sum()
-            .rename(columns={"Price (CAD)": "Revenue"})
-            .sort_values("Revenue", ascending=True)
-        )
-
-        fig_revenue = px.bar(
-            revenue_by_type,
-            x="Revenue",
-            y="Product Type",
-            orientation="h",
-            title="Total Revenue by Product Type",
-        )
-        fig_revenue.update_layout(height=500, showlegend=False, xaxis_title="Revenue (CAD)", yaxis_title="Product Type")
-        fig_revenue.update_traces(texttemplate="$%{x:,.0f}", textposition="outside")
-        st.plotly_chart(fig_revenue, use_container_width=True, key=pkey("pm_revtype"))
-
-        # Volume by Product Type
-        st.markdown("---")
-        st.subheader("📊 Sales Volume Distribution")
-
-        volume_by_type = (
-            pm_df.groupby("Product Type")
-            .size()
-            .reset_index(name="Count")
-            .sort_values("Count", ascending=True)
-        )
-
-        fig_volume = px.bar(
-            volume_by_type,
-            x="Count",
-            y="Product Type",
-            orientation="h",
-            title="Total Sales by Product Type",
-        )
-        fig_volume.update_layout(height=500, showlegend=False, xaxis_title="Number of Sales", yaxis_title="Product Type")
-        fig_volume.update_traces(texttemplate="%{x:,}", textposition="outside")
-        st.plotly_chart(fig_volume, use_container_width=True, key=pkey("pm_voltype"))
-
     # =====================================================
-    # TAB 2: INTERACTIVE TREEMAP
+    # TAB 2: INTERACTIVE TREEMAP (ORIGINAL COLORS RESTORED)
     # =====================================================
     with pm_tabs[1]:
-        st.subheader("🗺️ Interactive Product Hierarchy")
+        st.subheader("Interactive Product Hierarchy")
 
         st.markdown('<div class="insight-box">', unsafe_allow_html=True)
         st.markdown(
@@ -1493,19 +1628,24 @@ with tab_mix:
         )
         st.markdown("</div>", unsafe_allow_html=True)
 
+        # ✅ RESTORED ORIGINAL COLOR SCHEME: RdYlBu_r
         fig_treemap = px.treemap(
             pm_df,
             path=["Product Type", "Grade", "Species"],
             values="Price (CAD)",
             title="Product Mix Revenue Hierarchy (Click to Zoom)",
             color="Price (CAD)",
+            color_continuous_scale='RdYlBu_r',  # ✅ ORIGINAL COLOR
         )
         fig_treemap.update_layout(height=700, font=dict(size=14))
-        fig_treemap.update_traces(marker=dict(line=dict(width=2, color="white")))
+        fig_treemap.update_traces(
+            textfont_size=12,
+            marker=dict(line=dict(width=2, color="white"))
+        )
         st.plotly_chart(fig_treemap, use_container_width=True, key=pkey("pm_tree"))
 
         st.markdown("---")
-        if st.checkbox("📊 View Complete Data Table", key=wkey("pm_treemap_data")):
+        if st.checkbox("View Complete Data Table", key=wkey("pm_treemap_data")):
             hierarchy_data = (
                 pm_df.groupby(["Product Type", "Grade", "Species"])
                 .agg(
@@ -1521,10 +1661,12 @@ with tab_mix:
             st.dataframe(hierarchy_data, use_container_width=True)
 
     # =====================================================
-    # TAB 3: REVENUE ANALYSIS
+    # TAB 3: REVENUE ANALYSIS (REMOVED Individual Product Breakdowns)
     # =====================================================
     with pm_tabs[2]:
-        st.subheader("📈 Revenue Deep Dive")
+        st.subheader("Revenue Deep Dive")
+        
+        st.markdown("### Total Revenue by Grade")
 
         grade_revenue = (
             pm_df.groupby("Grade", as_index=False)
@@ -1534,69 +1676,429 @@ with tab_mix:
         grade_revenue["Percentage"] = ((grade_revenue["Revenue"] / total_grade_rev) * 100).round(1) if total_grade_rev else 0
         grade_revenue = grade_revenue.sort_values("Revenue", ascending=False)
 
+        # ✅ ORIGINAL COLORS: Viridis
         fig_grade = px.bar(
             grade_revenue,
             x="Grade",
             y="Revenue",
-            title="Total Revenue by Ammolite Grade",
+            title="Total Revenue by Grade",
             text="Percentage",
+            color="Revenue",
+            color_continuous_scale='Viridis',  # ✅ ORIGINAL COLOR
         )
         fig_grade.update_traces(texttemplate="%{text:.1f}%", textposition="outside")
         fig_grade.update_layout(height=500, xaxis_title="Grade", yaxis_title="Revenue (CAD)", showlegend=False)
         st.plotly_chart(fig_grade, use_container_width=True, key=pkey("pm_grade"))
 
+        # DYNAMIC INSIGHT
         if not grade_revenue.empty:
             top = grade_revenue.iloc[0]
             st.markdown('<div class="insight-box">', unsafe_allow_html=True)
             st.markdown(
                 f"""
-                Top grade by revenue is **{top['Grade']}** generating **${top['Revenue']:,.0f}**
-                (**{top['Percentage']:.1f}%** of total grade revenue).
+                Grade {top['Grade']} generates **${top['Revenue']:,.0f}** ({top['Percentage']:.1f}% of total), 
+                leading revenue contribution. This grade represents the optimal balance of quality, pricing, and market demand, 
+                making it the strategic sweet spot for product development and inventory focus.
                 """,
                 unsafe_allow_html=True,
             )
             st.markdown("</div>", unsafe_allow_html=True)
 
+    # =====================================================
+    # TAB 4: PRICING ANALYSIS (REMOVED Price Distribution by Grade)
+    # =====================================================
+    with pm_tabs[3]:
+        st.subheader("Pricing Structure Analysis")
+        
+        st.markdown("### Price Distribution by Product Type")
+
+        st.markdown('<div class="insight-box">', unsafe_allow_html=True)
+        st.markdown(
+            """
+            Violin plots show the full price distribution for each product type.
+            Wider areas = more transactions at that price.
+            """,
+            unsafe_allow_html=True,
+        )
+        st.markdown("</div>", unsafe_allow_html=True)
+
+        fig_violin = go.Figure()
+        for pt in sorted(pm_df["Product Type"].dropna().unique()):
+            data = pm_df.loc[pm_df["Product Type"] == pt, "Price (CAD)"]
+            if len(data) > 0:
+                fig_violin.add_trace(go.Violin(
+                    y=data,
+                    name=str(pt),
+                    box_visible=True,
+                    meanline_visible=True,
+                    opacity=0.6,
+                ))
+        fig_violin.update_layout(
+            title="Price Distribution Across Product Types (Violin Plot)",
+            yaxis_title="Price (CAD)",
+            xaxis_title="Product Type",
+            height=600,
+            showlegend=False,
+            violinmode="group",
+        )
+        st.plotly_chart(fig_violin, use_container_width=True, key=pkey("pm_violin_type"))
+
         st.markdown("---")
-        st.subheader("📊 Individual Product Type Breakdowns")
+        if st.checkbox("View Detailed Price Statistics Table", key=wkey("pm_price_stats")):
+            price_stats = (
+                pm_df.groupby(["Product Type", "Grade"])["Price (CAD)"]
+                .agg(["count", "mean", "median", "std", "min", "max"])
+                .round(2)
+                .rename(columns={"count": "Sales", "mean": "Mean", "median": "Median", "std": "Std Dev", "min": "Min", "max": "Max"})
+                .sort_values("Mean", ascending=False)
+            )
+            st.dataframe(price_stats, use_container_width=True)
 
-        for product_type in pm_df["Product Type"].dropna().unique():
-            product_df = pm_df[pm_df["Product Type"] == product_type].copy()
-            if product_df.empty:
-                continue
+    # =====================================================
+    # TAB 5: EFFICIENCY METRICS (ORIGINAL COLORS)
+    # =====================================================
+    with pm_tabs[4]:
+        st.subheader("Sales Efficiency Analysis")
+        
+        st.markdown("### Sales Efficiency: Volume vs Revenue")
 
-            with st.expander(f"🔍 {product_type} Analysis"):
-                c1, c2, c3, c4 = st.columns(4)
+        st.markdown('<div class="insight-box">', unsafe_allow_html=True)
+        st.markdown(
+            """
+            Efficiency = revenue per sale. Bubble chart compares volume vs revenue,
+            bubble size = total revenue contribution.
+            """,
+            unsafe_allow_html=True,
+        )
+        st.markdown("</div>", unsafe_allow_html=True)
 
-                p_rev = product_df["Price (CAD)"].sum()
-                p_sales = len(product_df)
-                p_avg = product_df["Price (CAD)"].mean() if p_sales else 0
-                p_disc = product_df["Discount (CAD)"].mean() if p_sales else 0
-                p_disc_pct = (p_disc / p_avg * 100) if p_avg else 0
-                pct_of_total = (p_rev / total_rev * 100) if total_rev else 0
+        efficiency = (
+            pm_df.groupby("Product Type")
+            .agg(**{"Sales": ("Sale ID", "count"), "Total Revenue": ("Price (CAD)", "sum"), "Avg Price": ("Price (CAD)", "mean")})
+            .reset_index()
+        )
+        efficiency["Efficiency"] = efficiency["Total Revenue"] / efficiency["Sales"].replace(0, np.nan)
+        efficiency["Efficiency"] = efficiency["Efficiency"].fillna(0)
+        efficiency["Revenue %"] = ((efficiency["Total Revenue"] / efficiency["Total Revenue"].sum()) * 100).round(1) if efficiency["Total Revenue"].sum() else 0
 
-                c1.metric("Revenue", f"${p_rev:,.0f}")
-                c2.metric("Sales", f"{p_sales:,}")
-                c3.metric("Avg Price", f"${p_avg:,.2f}")
-                c4.metric("Avg Discount", f"{p_disc_pct:.2f}%")
+        # ✅ ORIGINAL COLORS: RdYlGn
+        fig_eff = px.scatter(
+            efficiency,
+            x="Sales",
+            y="Total Revenue",
+            size="Total Revenue",
+            color="Efficiency",
+            hover_name="Product Type",
+            title="Product Efficiency Matrix: Sales Volume vs Total Revenue",
+            labels={"Sales": "Number of Sales", "Total Revenue": "Total Revenue (CAD)", "Efficiency": "Revenue per Sale"},
+            color_continuous_scale='RdYlGn',  # ✅ ORIGINAL COLOR
+            size_max=80,
+        )
+        fig_eff.update_layout(height=600, xaxis_title="Sales Volume", yaxis_title="Total Revenue (CAD)")
 
-                st.caption(f"{pct_of_total:.1f}% of total revenue")
+        if not efficiency.empty:
+            med_sales = efficiency["Sales"].median()
+            med_rev = efficiency["Total Revenue"].median()
+            fig_eff.add_hline(y=med_rev, line_dash="dash", line_color="gray", opacity=0.5)
+            fig_eff.add_vline(x=med_sales, line_dash="dash", line_color="gray", opacity=0.5)
 
-                grade_product = (
-                    product_df.groupby("Grade", as_index=False)["Price (CAD)"]
-                    .sum()
-                    .rename(columns={"Price (CAD)": "Revenue"})
-                    .sort_values("Revenue", ascending=False)
-                )
+        st.plotly_chart(fig_eff, use_container_width=True, key=pkey("pm_eff_scatter"))
 
-                fig_pt_grade = px.bar(
-                    grade_product,
-                    x="Grade",
-                    y="Revenue",
-                    title=f"{product_type} • Revenue by Grade",
-                )
-                fig_pt_grade.update_layout(height=420, showlegend=False, xaxis_title="Grade", yaxis_title="Revenue (CAD)")
-                st.plotly_chart(fig_pt_grade, use_container_width=True, key=pkey(f"pm_pt_grade_{product_type}"))
+        st.markdown('<div class="insight-box">', unsafe_allow_html=True)
+        st.markdown(
+            """
+            **Quadrant Interpretation:**
+            
+            - **Top Right (Stars):** High volume + High revenue - Proven winners, scale aggressively
+            - **Top Left (Premium):** Low volume + High revenue - Efficient, high-margin products
+            - **Bottom Right (Volume Play):** High volume + Low revenue - Evaluate strategic value
+            - **Bottom Left (Underperformers):** Low volume + Low revenue - Consider elimination
+            """,
+            unsafe_allow_html=True,
+        )
+        st.markdown("</div>", unsafe_allow_html=True)
+
+        st.markdown("---")
+        st.subheader("Efficiency Rankings")
+
+        eff_sorted = efficiency.sort_values("Efficiency", ascending=False)
+
+        c1, c2 = st.columns(2)
+        with c1:
+            st.markdown("### Top 5 Most Efficient (Revenue per Sale)")
+            for _, row in eff_sorted.head(5).iterrows():
+                st.metric(row["Product Type"], f"${row['Efficiency']:,.2f}/sale", f"{row['Revenue %']:.1f}% of revenue")
+
+        with c2:
+            st.markdown("### Bottom 5 Least Efficient")
+            for _, row in eff_sorted.tail(5).iterrows():
+                st.metric(row["Product Type"], f"${row['Efficiency']:,.2f}/sale", f"{row['Revenue %']:.1f}% of revenue")
+
+        st.markdown("---")
+        if st.checkbox("View Efficiency Data Table", key=wkey("pm_eff_table")):
+            show = eff_sorted[["Product Type", "Sales", "Total Revenue", "Efficiency", "Revenue %"]].copy()
+            st.dataframe(show, use_container_width=True)
+
+    # =====================================================
+    # TAB 6: STRATEGIC INSIGHTS (DYNAMIC)
+    # =====================================================
+    with pm_tabs[5]:
+        st.subheader("Strategic Recommendations")
+        
+        # Calculate metrics from FILTERED data
+        total_revenue = pm_df["Price (CAD)"].sum()
+        total_sales = len(pm_df)
+        avg_transaction = pm_df["Price (CAD)"].mean()
+        avg_disc = (pm_df["Discount (CAD)"].mean() / pm_df["Price (CAD)"].mean() * 100) if pm_df["Price (CAD)"].mean() > 0 else 0
+        
+        # Find dominant product
+        product_revenue = pm_df.groupby("Product Type")["Price (CAD)"].sum().sort_values(ascending=False)
+        top_product = product_revenue.index[0] if len(product_revenue) > 0 else "N/A"
+        top_product_pct = (product_revenue.iloc[0] / total_revenue * 100) if len(product_revenue) > 0 and total_revenue > 0 else 0
+        top3_pct = (product_revenue.head(3).sum() / total_revenue * 100) if len(product_revenue) >= 3 and total_revenue > 0 else 0
+        
+        # Find dominant grade
+        if "Grade" in pm_df.columns:
+            grade_revenue = pm_df.groupby("Grade")["Price (CAD)"].sum().sort_values(ascending=False)
+            top_grade = grade_revenue.index[0] if len(grade_revenue) > 0 else "N/A"
+            top_grade_pct = (grade_revenue.iloc[0] / total_revenue * 100) if len(grade_revenue) > 0 and total_revenue > 0 else 0
+        else:
+            top_grade = "N/A"
+            top_grade_pct = 0
+        
+        # Calculate efficiency
+        efficiency_calc = pm_df.groupby("Product Type").agg({
+            "Sale ID": "count",
+            "Price (CAD)": ["sum", "mean"]
+        })
+        efficiency_calc.columns = ["Sales", "Total Revenue", "Avg Price"]
+        efficiency_calc["Efficiency"] = efficiency_calc["Total Revenue"] / efficiency_calc["Sales"]
+        efficiency_calc = efficiency_calc.sort_values("Efficiency", ascending=False)
+        
+        most_efficient = efficiency_calc.index[0] if len(efficiency_calc) > 0 else "N/A"
+        most_efficient_value = efficiency_calc.iloc[0]["Efficiency"] if len(efficiency_calc) > 0 else 0
+        least_efficient = efficiency_calc.index[-1] if len(efficiency_calc) > 0 else "N/A"
+        least_efficient_value = efficiency_calc.iloc[-1]["Efficiency"] if len(efficiency_calc) > 0 else 0
+        efficiency_gap = (most_efficient_value / least_efficient_value) if least_efficient_value > 0 else 0
+
+        with st.expander("Immediate Actions (0-3 Months)", expanded=False):
+            st.markdown('<div class="recommendation-box">', unsafe_allow_html=True)
+            
+            # Priority 1: Pricing (DYNAMIC)
+            if avg_disc < 2:
+                st.markdown(f"""
+                **Priority 1: Protect Pricing Power**
+                - Current discount rate of {avg_disc:.2f}% is exceptional - maintain this discipline
+                - Document value propositions that justify premium pricing
+                - Train sales team on value-based selling vs. discount negotiations
+                - **Expected Impact:** Preserve margin advantage over competitors
+                """)
+            else:
+                st.markdown(f"""
+                **Priority 1: Improve Pricing Discipline**
+                - Current discount rate of {avg_disc:.2f}% is higher than optimal
+                - Reduce discounting by implementing value-based pricing strategies
+                - Train sales team to resist discount requests
+                - **Target:** Reduce to <2% within 90 days
+                - **Expected Impact:** Immediate margin improvement of {avg_disc - 1.5:.1f} percentage points
+                """)
+            
+            # Priority 2: Supply Chain (DYNAMIC)
+            if top_product_pct > 40:
+                st.markdown(f"""
+                **Priority 2: Secure Supply Chain**
+                - {top_product} represents {top_product_pct:.1f}% of revenue - high dependency risk
+                - Establish backup suppliers for {top_product} immediately
+                - Increase safety stock for high-efficiency products
+                - Negotiate volume commitments with key suppliers
+                - **Expected Impact:** Reduce stockout risk by 50-60%
+                """)
+            else:
+                st.markdown(f"""
+                **Priority 2: Optimize Supply Chain**
+                - Portfolio is well-diversified (top product: {top_product_pct:.1f}%)
+                - Focus on optimizing fulfillment efficiency
+                - Negotiate better terms with suppliers based on volume
+                - **Expected Impact:** 5-10% cost reduction in procurement
+                """)
+            
+            # Priority 3: Quick Wins (DYNAMIC)
+            st.markdown(f"""
+            **Priority 3: Quick Wins**
+            - Bundle high-efficiency ({most_efficient}) with lower performers to move inventory
+            - Test 10-15% price increases on top products (they have pricing power)
+            - Focus sales effort on {most_efficient} (${most_efficient_value:,.0f}/sale vs ${least_efficient_value:,.0f}/sale for {least_efficient})
+            - **Expected Impact:** 8-12% revenue increase with same sales effort
+            """)
+            
+            st.markdown("</div>", unsafe_allow_html=True)
+
+        with st.expander("Short-Term Strategy (3-6 Months)", expanded=False):
+            st.markdown('<div class="recommendation-box">', unsafe_allow_html=True)
+            
+            # Initiative 1: Portfolio Rebalancing (DYNAMIC)
+            if top_product_pct > 50:
+                target_pct = 40
+            elif top_product_pct > 40:
+                target_pct = 35
+            else:
+                target_pct = max(30, top_product_pct - 5)
+            
+            st.markdown(f"""
+            **Initiative 1: Portfolio Rebalancing**
+            - **Current State:** {top_product} at {top_product_pct:.1f}%, top 3 at {top3_pct:.1f}%
+            - **Target:** Reduce {top_product} to <{target_pct}% within 6 months
+            - **How:** Don't reduce {top_product} sales - grow other categories around it
+            - Invest in 2-3 underutilized categories with growth potential
+            - Develop new SKUs in proven {top_grade} grade (top revenue generator)
+            - **Expected Impact:** 15-20% revenue growth from diversification
+            """)
+            
+            # Initiative 2: Sales Force Realignment (DYNAMIC)
+            st.markdown(f"""
+            **Initiative 2: Sales Force Realignment**
+            - **Problem:** {efficiency_gap:.0f}x efficiency gap between {most_efficient} (${most_efficient_value:,.0f}/sale) and {least_efficient} (${least_efficient_value:,.0f}/sale)
+            - **Solution:** Compensate based on profit contribution, not volume
+            - Create incentives for high-efficiency product sales
+            - Reduce effort on low-efficiency products (automate/eliminate)
+            - **Expected Impact:** 25% improvement in team productivity
+            """)
+            
+            # Initiative 3: Customer Segmentation
+            customer_count = pm_df["Customer Name"].nunique() if "Customer Name" in pm_df.columns else total_sales
+            st.markdown(f"""
+            **Initiative 3: Customer Segmentation**
+            - Analyze {customer_count:,} customers to identify Premium vs. Value vs. Mixed buyers
+            - Develop targeted strategies for each segment
+            - Create VIP program for top 20% of customers
+            - **Expected Impact:** 20-30% increase in customer lifetime value
+            """)
+            
+            st.markdown("</div>", unsafe_allow_html=True)
+
+        with st.expander("Long-Term Vision (6-12 Months)", expanded=False):
+            st.markdown('<div class="recommendation-box">', unsafe_allow_html=True)
+            
+            # Theme 1: Diversification (DYNAMIC)
+            st.markdown(f"""
+            **Theme 1: Sustainable Diversification**
+            - **Target Portfolio Mix (12 months):**
+              * Primary category ({top_product}): 35-40% (from current {top_product_pct:.1f}%)
+              * Secondary categories: 40-45% distributed across 3-4 products
+              * Emerging/experimental: 15-20% new product development
+            
+            - **Development Roadmap:**
+              * Months 1-3: Research and identify growth categories
+              * Months 4-6: Pilot products in selected categories
+              * Months 7-9: Scale successful pilots
+              * Months 10-12: Portfolio rebalancing complete
+            
+            - **Investment:** 15-20% of current marketing budget redirected
+            - **Expected Outcome:** More resilient revenue base, no single product >40%
+            """)
+            
+            # Theme 2: Premium Brand Evolution (DYNAMIC)
+            if top_grade != "N/A":
+                st.markdown(f"""
+                **Theme 2: Premium Brand Evolution**
+                - **Three-tier architecture:**
+                  * Flagship: Top grade products, ultra-premium positioning
+                  * Core: {top_grade} grade (proven sweet spot at {top_grade_pct:.1f}% of revenue)
+                  * Access: Entry-level premium to attract new customers
+                
+                - **Pricing Strategy:**
+                  * Maintain current {avg_disc:.2f}% discount discipline
+                  * Implement dynamic pricing for scarcity items
+                  * Value-based pricing across all tiers
+                
+                - **Expected Outcome:** 40% increase in customer lifetime value
+                """)
+            else:
+                st.markdown(f"""
+                **Theme 2: Premium Brand Evolution**
+                - Develop clear product tiers based on price points
+                - Maintain current {avg_disc:.2f}% discount discipline
+                - Implement value-based pricing strategies
+                - **Expected Outcome:** 30-40% increase in customer lifetime value
+                """)
+            
+            # Theme 3: Operational Excellence (DYNAMIC)
+            tech_investment = int(total_revenue * 0.01)
+            tech_investment_rounded = round(tech_investment / 10000) * 10000
+            
+            st.markdown(f"""
+            **Theme 3: Operational Excellence**
+            - **Technology Investments:**
+              * CRM system to track customer preferences (~${tech_investment_rounded/3:,.0f})
+              * Inventory management optimized by product efficiency (~${tech_investment_rounded/3:,.0f})
+              * Business intelligence dashboard for real-time decisions (~${tech_investment_rounded/3:,.0f})
+            
+            - **Process Improvements:**
+              * Tier-based fulfillment (white-glove for {most_efficient}, automated for {least_efficient})
+              * Focus resources on high-efficiency products
+              * Streamline operations for volume products
+            
+            - **Investment:** ~${tech_investment_rounded:,.0f} in technology
+            - **Expected Outcome:** 25-30% operational efficiency improvement
+            """)
+            
+            st.markdown("</div>", unsafe_allow_html=True)
+
+        # DYNAMIC EXECUTIVE SUMMARY
+        st.markdown("---")
+        st.markdown('<div class="recommendation-box">', unsafe_allow_html=True)
+        
+        # Calculate projections (DYNAMIC)
+        projected_growth_low = total_revenue * 1.25
+        projected_growth_high = total_revenue * 1.30
+        total_investment = tech_investment_rounded + (total_revenue * 0.02)
+        total_investment_rounded = round(total_investment / 10000) * 10000
+        
+        # Dynamic concentration message
+        if top_product_pct > 50:
+            concentration_msg = f"CRITICAL concentration ({top_product_pct:.1f}% in {top_product}) presents significant risk"
+        elif top_product_pct > 40:
+            concentration_msg = f"High concentration ({top_product_pct:.1f}% in {top_product}) presents both opportunity and risk"
+        else:
+            concentration_msg = f"Balanced portfolio with largest category at {top_product_pct:.1f}%"
+        
+        st.markdown(
+            f"""
+            ### Executive Summary
+            
+            **Current State:** ${total_revenue:,.0f} revenue from {total_sales:,} transactions with {avg_disc:.2f}% avg discount. 
+            {concentration_msg}.
+            
+            **Key Strengths:**
+            1. {"Exceptional" if avg_disc < 2 else "Good"} pricing discipline ({avg_disc:.2f}% discount rate)
+            2. Strong performers: {top_product} leads with {top_product_pct:.1f}% of revenue
+            3. Proven efficiency: {most_efficient} at ${most_efficient_value:,.0f} per sale
+            4. Average transaction of ${avg_transaction:,.2f} indicates {"premium" if avg_transaction > 1000 else "mid-tier"} market positioning
+            
+            **Critical Risks:**
+            1. {"Portfolio concentration risk" if top_product_pct > 40 else "Minimal concentration risk"}
+            2. {efficiency_gap:.0f}x efficiency gap between best and worst performers
+            3. {"Pricing pressure" if avg_disc > 3 else "Potential for margin erosion if discounting increases"}
+            4. {"Supply chain dependency on " + top_product if top_product_pct > 40 else "Resource allocation inefficiency"}
+            
+            **Strategic Priorities:**
+            1. **Immediate:** {"Protect" if avg_disc < 2 else "Improve"} pricing power and secure supply chain
+            2. **Short-term:** {"Rebalance portfolio and" if top_product_pct > 40 else "Optimize"} align sales incentives  
+            3. **Long-term:** Sustainable diversification and operational excellence
+            
+            **Expected Outcomes (12 Months):**
+            - Revenue growth: 25-30% (${total_revenue:,.0f} → ${projected_growth_low:,.0f}-${projected_growth_high:,.0f})
+            - Margin improvement: {"Maintain current excellence" if avg_disc < 2 else f"Improve by {avg_disc - 1.5:.1f}pp"}
+            - Concentration: {"Reduce to <40%" if top_product_pct > 40 else "Maintain current balance"}
+            - Operational efficiency: +30%
+            
+            **Investment Required:** ${total_investment_rounded:,.0f} | **Expected ROI:** 300-400% over 2 years
+            """,
+            unsafe_allow_html=True,
+        )
+        st.markdown("</div>", unsafe_allow_html=True)
+
+# -----------------------------
 
     # =====================================================
     # TAB 4: PRICING ANALYSIS
@@ -2149,7 +2651,7 @@ with tab_segments:
         )
 
 # -----------------------------
-# TAB: Geography & Channels (Price-Drivers style layout)
+# TAB: Geography & Channels (Price-Drivers style layout)  YOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOO
 # -----------------------------
 with tab_geo:
     st.subheader("Geography & Channels")
@@ -2160,10 +2662,16 @@ with tab_geo:
     metric = metric_col
     metric_name = metric_label if "metric_label" in globals() else metric
 
+    # ---- make sure metric exists ----
+    if metric not in df.columns:
+        df[metric] = 0.0
+    df[metric] = pd.to_numeric(df[metric], errors="coerce").fillna(0.0)
+
     # ---- make sure core cols exist ----
     for col in ["Country", "Channel", "City"]:
         if col not in df.columns:
             df[col] = "Unknown"
+        df[col] = df[col].astype(str).fillna("Unknown")
 
     # ---- Month setup (prefer existing Month; else derive from Date) ----
     if "Month" in df.columns:
@@ -2225,7 +2733,11 @@ with tab_geo:
                 pv,
                 aspect="auto",
                 title=title,
-                labels=dict(x=pv.columns.name or "Channel", y=pv.index.name or "Country", color=unit),
+                labels=dict(
+                    x=pv.columns.name or "Channel",
+                    y=pv.index.name or "Country",
+                    color=unit,
+                ),
             )
             return fig_tight(hm, height=520)
 
@@ -2234,6 +2746,53 @@ with tab_geo:
             st.markdown(f"**Insights:**\n{insights_md if insights_md.strip() else '-'}")
             st.markdown(f"\n**Why it helps:**\n{why_md if why_md.strip() else '-'}")
             st.markdown(f"\n**Recommendations:**\n{recs_md if recs_md.strip() else '-'}")
+
+    # -----------------------------
+    # Dynamic Insights helpers
+    # -----------------------------
+    def _is_money_metric(name: str, col: str) -> bool:
+        s = f"{name} {col}".lower()
+        money_words = ["sales", "revenue", "net", "gross", "amount", "cad", "$", "value"]
+        return any(w in s for w in money_words)
+
+    METRIC_IS_MONEY = _is_money_metric(metric_name, metric)
+
+    def fmt_metric(x):
+        if x is None or (isinstance(x, float) and not np.isfinite(x)):
+            return "—"
+        try:
+            v = float(x)
+        except Exception:
+            return "—"
+        if METRIC_IS_MONEY:
+            return f"${v:,.0f} CAD"
+        return f"{int(round(v)):,}"
+
+    def fmt_pct(p):
+        if p is None or (isinstance(p, float) and not np.isfinite(p)):
+            return "—"
+        return f"{p*100:.1f}%"
+
+    def share_top_k(agg_df, k=3):
+        if agg_df is None or agg_df.empty or "value" not in agg_df.columns:
+            return np.nan
+        total = float(agg_df["value"].sum())
+        if total <= 0:
+            return np.nan
+        topk = float(agg_df.sort_values("value", ascending=False)["value"].head(k).sum())
+        return topk / total
+
+    def safe_first_share(series: pd.Series):
+        if series is None or len(series) == 0:
+            return np.nan
+        total = float(series.sum())
+        if total <= 0:
+            return np.nan
+        return float(series.iloc[0]) / total
+
+    def bullet(lines):
+        lines = [l for l in lines if l and str(l).strip()]
+        return "\n".join([f"- {l}" for l in lines]) if lines else "- —"
 
     # ---- aggregations ----
     country_totals = df.groupby("Country")[metric].sum().sort_values(ascending=False)
@@ -2254,51 +2813,22 @@ with tab_geo:
         neg_lag_rows = int((pd.to_numeric(df[lag_col], errors="coerce") < 0).sum())
 
     # -----------------------------
-    # Tabs (your requested ones)
+    # Sub-tabs (UPDATED)
+    # - Removed: Overview
+    # - Renamed: Time -> Shipping Lag
+    # - Removed: Data
     # -----------------------------
-    tabs = st.tabs(["Overview", "World Map", "Geography × Channels", "Time", "Stats", "Data"])
+    tabs = st.tabs(["World Map", "Geography × Channels", "Shipping Lag"])
 
     # ======================
-    # TAB 0: Overview
+    # TAB 0: World Map
     # ======================
     with tabs[0]:
-        total_val = float(country_totals.sum()) if len(country_totals) else 0.0
-        share_top = float(country_totals.iloc[0] / total_val) if total_val else np.nan
-        top_country_val = float(country_totals.iloc[0]) if len(country_totals) else np.nan
-        top_channel_val = float(channel_totals.iloc[0]) if len(channel_totals) else np.nan
-
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric(f"Total {metric_name}", f"${total_val:,.0f}")
-        c2.metric("Top Country", top_country)
-        c3.metric("Top Channel", top_channel)
-        c4.metric("Top Country Share", f"{share_top*100:,.1f}%" if np.isfinite(share_top) else "—")
-
-        insights_md = "\n".join([
-            f"- **{top_country}** drives **{share_top*100:.1f}%** of total {metric_name}." if np.isfinite(share_top) else "- Market share concentration can’t be computed (no total).",
-            f"- Top channel by {metric_name} is **{top_channel}**.",
-            f"- Consignment is **{cons_rate:.1f}%** of orders." if np.isfinite(cons_rate) else "- Consignment rate not available.",
-            f"- Shipping has **{neg_lag_rows}** negative lag rows (data issue)." if neg_lag_rows > 0 else "- No negative shipping lag rows detected (or lag not available).",
-        ])
-
-        why_md = "This gives you a fast ‘where to focus’ snapshot before drilling into maps, heatmaps, and time trends."
-
-        recs_md = "\n".join([
-            "- Protect the anchor market (top country) with inventory + fulfillment reliability.",
-            "- Scale the next 2–3 countries using the channels that are already winning in those markets.",
-            "- Clean negative shipping lag rows so ops KPIs are trustworthy." if neg_lag_rows > 0 else "-",
-        ])
-
-        insights_expander("Overview", insights_md, why_md, recs_md)
-        st.divider()
-
-    # ======================
-    # TAB 1: World Map
-    # ======================
-    with tabs[1]:
-        st.subheader(f"World map - {metric_name} ($ CAD)")
+        st.subheader(f"World map - {metric_name} ($ CAD)" if METRIC_IS_MONEY else f"World map - {metric_name}")
 
         agg = country_totals.reset_index().rename(columns={metric: "value"})
-        agg["share"] = agg["value"] / agg["value"].sum()
+        total_val = float(agg["value"].sum()) if not agg.empty else 0.0
+        agg["share"] = np.where(total_val > 0, agg["value"] / total_val, np.nan)
 
         if agg.empty:
             st.info("No country data available for current filters.")
@@ -2314,6 +2844,8 @@ with tab_geo:
             )
             fig.update_traces(
                 hovertemplate="<b>%{location}</b><br>Value: %{z:$,.0f} CAD<br>Share: %{customdata[0]:.1%}<extra></extra>"
+                if METRIC_IS_MONEY
+                else "<b>%{location}</b><br>Value: %{z:,.0f}<br>Share: %{customdata[0]:.1%}<extra></extra>"
             )
             fig = fig_tight(fig, height=520)
             st.plotly_chart(fig, use_container_width=True, key=pkey("geo_world"))
@@ -2324,20 +2856,50 @@ with tab_geo:
             top_tbl = rank_df(top_tbl)
             st.dataframe(top_tbl.set_index("#")[["Country", "value", "share"]], use_container_width=True)
 
-        insights_md = "- Revenue/value is concentrated in a few countries (darker areas)."
-        why_md = "Maps help you see concentration instantly and identify which markets deserve priority."
-        recs_md = "\n".join([
-            "- Focus spend + inventory on the top markets first.",
-            "- Expand to next-tier markets using the best-performing channel patterns from the heatmap tab."
-        ])
+        # ---- Dynamic insights (World Map) ----
+        n_countries = int(agg["Country"].nunique()) if not agg.empty else 0
+        top1_share = share_top_k(agg, k=1)
+        top3_share = share_top_k(agg, k=3)
+        top5_share = share_top_k(agg, k=5)
+        top_channel_share = safe_first_share(channel_totals)
 
-        insights_expander("World Map", insights_md, why_md, recs_md)
+        ins_lines = [
+            f"Countries in view: **{n_countries}**.",
+            (f"Top market: **{top_country}** ({fmt_pct(top1_share)} of total)." if np.isfinite(top1_share) else ""),
+            (f"Top 3 markets contribute **{fmt_pct(top3_share)}** of total." if np.isfinite(top3_share) else ""),
+            (f"Top 5 markets contribute **{fmt_pct(top5_share)}** of total." if np.isfinite(top5_share) else ""),
+            (f"Top channel overall: **{top_channel}** ({fmt_pct(top_channel_share)} of total)." if np.isfinite(top_channel_share) else ""),
+            (f"Consignment rate: **{cons_rate:.1f}%**." if np.isfinite(cons_rate) else ""),
+        ]
+        why_lines = [
+            "Shows where demand/value is concentrated so you can prioritize markets fast.",
+            "Makes it easy to spot new/under-served regions worth testing.",
+        ]
+        recs = []
+        if np.isfinite(top1_share) and top1_share >= 0.50:
+            recs.append(f"High concentration in **{top_country}** → reduce risk by growing the next 2–3 markets.")
+        elif np.isfinite(top3_share) and top3_share >= 0.75:
+            recs.append("Strong top-3 concentration → focus inventory + marketing there, but run small tests elsewhere.")
+
+        if np.isfinite(top_channel_share) and top_channel_share >= 0.60:
+            recs.append(f"Heavy channel dependence on **{top_channel}** → protect performance (backup channel plan).")
+
+        if np.isfinite(cons_rate) and cons_rate >= 50:
+            recs.append("Consignment is a big share → track cash timing + returns separately (avoid mixing with standard sales).")
+
+        if not recs:
+            recs = [
+                "Focus spend + inventory on top markets first.",
+                "Expand to next-tier markets using the best-performing channel patterns from the heatmap tab.",
+            ]
+
+        insights_expander("World Map", bullet(ins_lines), bullet(why_lines), bullet(recs))
         st.divider()
 
     # ======================
-    # TAB 2: Geography × Channels
+    # TAB 1: Geography × Channels
     # ======================
-    with tabs[2]:
+    with tabs[1]:
         top_n = st.slider("Top N countries", 3, 30, 12, key="geo_top_n")
 
         colA, colB = st.columns(2)
@@ -2347,7 +2909,11 @@ with tab_geo:
             top_c = country_totals.head(top_n).reset_index().rename(columns={metric: "value"})
             fig1 = px.bar(top_c, x="Country", y="value", title=f"Top {top_n} Countries ({metric_name})")
             fig1.update_layout(xaxis={"categoryorder": "total descending"})
-            fig1.update_traces(hovertemplate="<b>%{x}</b><br>Value: %{y:$,.0f} CAD<extra></extra>")
+            fig1.update_traces(
+                hovertemplate="<b>%{x}</b><br>Value: %{y:$,.0f} CAD<extra></extra>"
+                if METRIC_IS_MONEY
+                else "<b>%{x}</b><br>Value: %{y:,.0f}<extra></extra>"
+            )
             fig1 = fig_tight(fig1, height=460)
             st.plotly_chart(fig1, use_container_width=True, key=pkey("geo_top_c"))
             download_html(fig1, "02_top_countries.html")
@@ -2355,9 +2921,13 @@ with tab_geo:
         with colB:
             st.subheader(f"{metric_name} by channel")
             ch = channel_totals.reset_index().rename(columns={metric: "value"})
-            fig2 = px.bar(ch, x="Channel", y="value", title=f"{metric_name} by Channel ($ CAD)")
+            fig2 = px.bar(ch, x="Channel", y="value", title=f"{metric_name} by Channel")
             fig2.update_layout(xaxis={"categoryorder": "total descending"})
-            fig2.update_traces(hovertemplate="<b>%{x}</b><br>Value: %{y:$,.0f} CAD<extra></extra>")
+            fig2.update_traces(
+                hovertemplate="<b>%{x}</b><br>Value: %{y:$,.0f} CAD<extra></extra>"
+                if METRIC_IS_MONEY
+                else "<b>%{x}</b><br>Value: %{y:,.0f}<extra></extra>"
+            )
             fig2 = fig_tight(fig2, height=460)
             st.plotly_chart(fig2, use_container_width=True, key=pkey("geo_ch_bar"))
             download_html(fig2, "03_channel_bar.html")
@@ -2370,115 +2940,143 @@ with tab_geo:
         if pv.empty:
             st.info("Not enough data for the heatmap in current filters.")
         else:
-            fig3 = heatmap_from_pivot(pv, f"Heatmap: {metric_name} ($ CAD)", "$ CAD")
+            unit = "$ CAD" if METRIC_IS_MONEY else "value"
+            fig3 = heatmap_from_pivot(pv, f"Heatmap: {metric_name} ({unit})", unit)
             st.plotly_chart(fig3, use_container_width=True, key=pkey("geo_hm"))
             download_html(fig3, "04_country_channel_heatmap.html")
 
-        st.subheader("Channel mix share by country (Top countries)")
-        if not df_top.empty:
-            mix = df_top.groupby(["Country", "Channel"])[metric].sum().reset_index().rename(columns={metric: "value"})
-            mix["country_total"] = mix.groupby("Country")["value"].transform("sum")
-            mix["share"] = mix["value"] / mix["country_total"]
+        # ---- Dynamic insights (Geography × Channels) ----
+        total_metric_all = float(df[metric].sum()) if metric in df.columns else np.nan
+        top_n_share = (float(country_totals.head(top_n).sum()) / total_metric_all) if np.isfinite(total_metric_all) and total_metric_all > 0 else np.nan
 
-            fig4 = px.bar(
-                mix,
-                x="Country",
-                y="share",
-                color="Channel",
-                barmode="stack",
-                title="Channel Mix (Share of Country Total)",
-            )
-            fig4.update_layout(yaxis_tickformat=".0%", xaxis={"categoryorder": "total descending"})
-            fig4 = fig_tight(fig4, height=520)
-            st.plotly_chart(fig4, use_container_width=True, key=pkey("geo_mix"))
-            download_html(fig4, "05_channel_mix_share.html")
+        hotspot = None
+        if not pv.empty:
+            stack = pv.stack()
+            if len(stack) > 0:
+                (hc, hch) = stack.idxmax()
+                hotspot = (hc, hch, float(stack.max()))
 
-        insights_md = "\n".join([
-            "- A small group of countries generates most of the total value.",
-            "- Some channels clearly drive more value than others.",
-            "- Best channel differs by country (heatmap hotspots).",
-            "- Countries have different channel “profiles” (mix share).",
-        ])
-        why_md = "This is the fastest way to choose a country + channel strategy without guessing."
-        recs_md = "\n".join([
-            "- Treat smaller countries as experiments; scale only those with repeatable traction.",
-            "- Put your best products + marketing behind the top channel(s).",
-            "- Pick 1–2 winning channels per top country and build a playbook around them.",
-            "- Don’t force one global channel strategy—optimize per market.",
-        ])
+        best_channels = []
+        if not pv.empty:
+            top3_countries = country_totals.head(min(3, len(country_totals))).index.tolist()
+            for c in top3_countries:
+                if c in pv.index:
+                    best_ch = pv.loc[c].idxmax()
+                    best_val = float(pv.loc[c].max())
+                    best_channels.append(f"**{c}** → best channel: **{best_ch}** ({fmt_metric(best_val)}).")
 
-        insights_expander("Geography × Channels", insights_md, why_md, recs_md)
+        ins_lines = [
+            (f"Top {top_n} countries contribute **{fmt_pct(top_n_share)}** of total." if np.isfinite(top_n_share) else ""),
+            (f"Top channel overall: **{top_channel}** ({fmt_pct(safe_first_share(channel_totals))} of total)." if len(channel_totals) else ""),
+        ]
+        if hotspot is not None:
+            ins_lines.append(f"Biggest hotspot: **{hotspot[0]} × {hotspot[1]}** ({fmt_metric(hotspot[2])}).")
+        ins_lines += best_channels
+
+        why_lines = [
+            "Shows which countries and channels drive results, and where each market behaves differently.",
+            "Heatmap reveals the best country+channel combinations to scale.",
+        ]
+
+        recs = []
+        if np.isfinite(top_n_share) and top_n_share >= 0.80:
+            recs.append(f"Most results come from the top {top_n} countries → protect those markets (stock + campaigns).")
+
+        ch_share = safe_first_share(channel_totals)
+        if np.isfinite(ch_share) and ch_share >= 0.60:
+            recs.append(f"Results are heavily driven by **{top_channel}** → diversify tests into the #2 channel to reduce risk.")
+
+        if hotspot is not None and np.isfinite(total_metric_all) and total_metric_all > 0:
+            hotspot_share = hotspot[2] / total_metric_all
+            if hotspot_share >= 0.25:
+                recs.append(f"One hotspot is huge ({fmt_pct(hotspot_share)}) → build a repeatable playbook for that combo.")
+
+        if not recs:
+            recs = [
+                "Treat smaller countries as experiments; scale only those with repeatable traction.",
+                "Pick 1–2 winning channels per top country and build a playbook around them.",
+                "Don’t force one global channel strategy—optimize per market.",
+            ]
+
+        insights_expander("Geography × Channels", bullet(ins_lines), bullet(why_lines), bullet(recs))
         st.divider()
 
     # ======================
-    # TAB 3: Time
+    # TAB 2: Shipping Lag
     # ======================
-    with tabs[3]:
-        st.subheader("Time trends")
-
-        ts_df = (
-            df.dropna(subset=["Month", metric])
-            .groupby("Month")[metric].sum()
-            .reset_index()
-            .rename(columns={metric: "value"})
-            .sort_values("Month")
-        )
-
-        if ts_df.empty:
-            st.info("Not enough Month data in current filters.")
-        else:
-            fig = px.line(ts_df, x="Month", y="value", title=f"Monthly {metric_name} ($ CAD)")
-            fig.update_traces(hovertemplate="Month: %{x|%Y-%m}<br>Value: %{y:$,.0f} CAD<extra></extra>")
-            fig = fig_tight(fig, height=420)
-            st.plotly_chart(fig, use_container_width=True, key=pkey("time_month"))
-            download_html(fig, "10_monthly_trend.html")
-
-        ch_tot = df.groupby("Channel")[metric].sum().sort_values(ascending=False)
-        top6 = ch_tot.head(6).index.tolist()
-
-        by_ch = (
-            df[df["Channel"].isin(top6)]
-            .dropna(subset=["Month", metric])
-            .groupby(["Month", "Channel"])[metric].sum()
-            .reset_index()
-            .rename(columns={metric: "value"})
-        )
-
-        if not by_ch.empty:
-            figc = px.line(by_ch, x="Month", y="value", color="Channel", title=f"Monthly {metric_name} by Channel (Top 6) ($ CAD)")
-            figc.update_traces(hovertemplate="Month: %{x|%Y-%m}<br>Value: %{y:$,.0f} CAD<extra></extra>")
-            figc = fig_tight(figc, height=420)
-            st.plotly_chart(figc, use_container_width=True, key=pkey("time_ch"))
-            download_html(figc, "11_monthly_trend_by_channel_top6.html")
-
-        st.divider()
+    with tabs[2]:
         st.subheader("Shipping lag")
 
         if lag_col is None or lag_col not in df.columns:
             st.info("No shipping lag available (need Days to Ship or Date + Shipped Date).")
+
+            insights_md = bullet(["No shipping lag column available in this file."])
+            why_md = bullet([
+                "Helps identify where fulfillment delays occur so operations fixes are targeted.",
+                "Prevents guessing by showing delay hotspots alongside volume."
+            ])
+            recs_md = bullet([
+                "Add **Days to Ship** or **Date + Shipped Date** to enable lag insights.",
+                "Standardize date formats and ensure shipped dates are after order dates."
+            ])
+            insights_expander("Shipping Lag", insights_md, why_md, recs_md)
+            st.divider()
+
         else:
             clean_neg = st.toggle("Treat negative lag rows as missing", value=True, key="lag_clean_neg")
 
             lag_df = df.dropna(subset=[lag_col]).copy()
             lag_df["Ship Lag (days)"] = pd.to_numeric(lag_df[lag_col], errors="coerce")
+            lag_df = lag_df.dropna(subset=["Ship Lag (days)"])
+
             if clean_neg:
                 lag_df = lag_df[lag_df["Ship Lag (days)"] >= 0]
 
             if lag_df.empty:
                 st.info("No usable shipping lag values after filters.")
+
+                insights_md = bullet(["No usable shipping lag values after cleaning/filters."])
+                why_md = bullet([
+                    "Highlights where fulfillment delays cluster so ops fixes happen where they matter most.",
+                    "Prevents optimizing low-impact areas."
+                ])
+                recs_md = bullet([
+                    "Check your lag/date columns for blanks or invalid values.",
+                    "If you derive lag from dates, confirm **Date** and **Shipped Date** are parsed correctly."
+                ])
+                insights_expander("Shipping Lag", insights_md, why_md, recs_md)
+                st.divider()
+
             else:
                 col1, col2 = st.columns(2)
 
                 with col1:
-                    by_country = (lag_df.groupby("Country")["Ship Lag (days)"].mean().sort_values(ascending=False).head(20).reset_index())
+                    by_country = (
+                        lag_df.groupby("Country")["Ship Lag (days)"]
+                        .mean()
+                        .sort_values(ascending=False)
+                        .head(20)
+                        .reset_index()
+                    )
                     fig1 = px.bar(by_country, x="Country", y="Ship Lag (days)", title="Avg Ship Lag by Country (days)")
                     fig1.update_layout(xaxis={"categoryorder": "total descending"})
                     fig1 = fig_tight(fig1, height=420)
                     st.plotly_chart(fig1, use_container_width=True, key=pkey("lag_country"))
                     download_html(fig1, "06_ship_lag_by_country.html")
 
-                    pick = st.selectbox("Country → city drilldown", sorted(lag_df["Country"].unique().tolist()), key="lag_pick")
-                    by_city = (lag_df[lag_df["Country"] == pick].groupby("City")["Ship Lag (days)"].mean().sort_values(ascending=False).head(15).reset_index())
+                    pick = st.selectbox(
+                        "Country → city drilldown",
+                        sorted(lag_df["Country"].unique().tolist()),
+                        key="lag_pick",
+                    )
+                    by_city = (
+                        lag_df[lag_df["Country"] == pick]
+                        .groupby("City")["Ship Lag (days)"]
+                        .mean()
+                        .sort_values(ascending=False)
+                        .head(15)
+                        .reset_index()
+                    )
                     fig2 = px.bar(by_city, x="City", y="Ship Lag (days)", title=f"Avg Ship Lag by City in {pick} (Top 15)")
                     fig2.update_layout(xaxis={"categoryorder": "total descending"})
                     fig2 = fig_tight(fig2, height=420)
@@ -2489,12 +3087,16 @@ with tab_geo:
                     min_orders = st.slider("Minimum orders per Country+City", 2, 15, 5, key="lag_min_orders")
 
                     order_col = "Sale ID" if "Sale ID" in lag_df.columns else metric
-                    cc = (lag_df.groupby(["Country", "City"]).agg(
-                        orders=(order_col, "count"),
-                        avg_lag=("Ship Lag (days)", "mean"),
-                        med_lag=("Ship Lag (days)", "median"),
-                        total_metric=(metric, "sum")
-                    ).reset_index())
+                    cc = (
+                        lag_df.groupby(["Country", "City"])
+                        .agg(
+                            orders=(order_col, "count"),
+                            avg_lag=("Ship Lag (days)", "mean"),
+                            med_lag=("Ship Lag (days)", "median"),
+                            total_metric=(metric, "sum"),
+                        )
+                        .reset_index()
+                    )
                     cc = cc[cc["orders"] >= min_orders].copy()
                     cc = cc.sort_values(["avg_lag", "orders"], ascending=[False, False]).head(25)
 
@@ -2503,11 +3105,14 @@ with tab_geo:
                     cc["med_lag"] = cc["med_lag"].round(1)
 
                     cc = rank_df(cc).rename(columns={"total_metric": f"Total ({metric_name})"})
-                    st.dataframe(cc.set_index("#")[["Country", "City", "orders", "avg_lag", "med_lag", f"Total ({metric_name})"]], use_container_width=True)
+                    st.dataframe(
+                        cc.set_index("#")[["Country", "City", "orders", "avg_lag", "med_lag", f"Total ({metric_name})"]],
+                        use_container_width=True,
+                    )
 
-                    top_countries = (lag_df.groupby("Country")[metric].sum().sort_values(ascending=False).head(12).index)
+                    top_countries = lag_df.groupby("Country")[metric].sum().sort_values(ascending=False).head(12).index
                     sub = lag_df[lag_df["Country"].isin(top_countries)].copy()
-                    top_cities = (sub.groupby("City")[metric].sum().sort_values(ascending=False).head(20).index)
+                    top_cities = sub.groupby("City")[metric].sum().sort_values(ascending=False).head(20).index
                     sub = sub[sub["City"].isin(top_cities)].copy()
 
                     pv2 = sub.pivot_table(values="Ship Lag (days)", index="Country", columns="City", aggfunc="mean")
@@ -2516,305 +3121,48 @@ with tab_geo:
                         st.plotly_chart(fig3, use_container_width=True, key=pkey("lag_hm"))
                         download_html(fig3, "08_ship_lag_heatmap_country_city.html")
 
-        insights_md = "\n".join([
-            "- Monthly movement is visible and can highlight seasonality or campaign effects.",
-            f"- Top channels in this range: **{', '.join(top6)}**." if len(top6) else "- No channel totals available for this range.",
-            "- Shipping lag views show where delays cluster by country/city and where to fix first.",
-        ])
-        why_md = "Time trends help you catch spikes/drops early and connect them to markets/channels. Shipping lag helps ops performance."
-        recs_md = "\n".join([
-            "- When the overall line moves, check the channel trend to find the driver.",
-            "- Set country-level SLAs and fix the biggest delay hotspots first (high lag + meaningful volume).",
-            "- Clean negative lag rows so lag KPIs are reliable.",
-        ])
+                # ---- Dynamic insights (Shipping Lag) ----
+                mean_lag = float(lag_df["Ship Lag (days)"].mean())
+                med_lag = float(lag_df["Ship Lag (days)"].median())
+                p90_lag = float(lag_df["Ship Lag (days)"].quantile(0.90))
 
-        insights_expander("Time", insights_md, why_md, recs_md)
-        st.divider()
+                lag_ins = [
+                    f"Avg lag: **{mean_lag:.1f} days** (median **{med_lag:.1f}**, p90 **{p90_lag:.1f}**).",
+                    (f"Negative lag rows detected: **{neg_lag_rows}** (data issue)." if neg_lag_rows > 0 else "No negative lag rows detected (or already cleaned)."),
+                ]
 
-   # ======================
-# TAB 4: Stats  (WITH Excel-style tables)
-# ======================
-with tabs[4]:
-    st.subheader("Stats")
-
-    # local p-value formatter (safe)
-    def _p_fmt(v):
-        try:
-            v = float(v)
-        except Exception:
-            return "—"
-        if not np.isfinite(v):
-            return "—"
-        if v < 1e-4:
-            return "<0.0001"
-        return f"{v:.4f}"
-
-    # numeric metric column (safe)
-    df_stat = df.copy()
-    df_stat[metric] = pd.to_numeric(df_stat[metric], errors="coerce")
-
-    # -----------------------------
-    # 1) Channel value differences (Kruskal) + Excel table
-    # -----------------------------
-    st.markdown("### 1) Do channels differ on order value?")
-
-    ch_tbl = (
-        df_stat.dropna(subset=["Channel", metric])
-        .groupby("Channel", as_index=False)
-        .agg(
-            Orders=(metric, "count"),
-            Total_Value=(metric, "sum"),
-            Avg_Value=(metric, "mean"),
-            Median_Value=(metric, "median"),
-            P90_Value=(metric, lambda x: x.quantile(0.90)),
-        )
-    )
-
-    if ch_tbl.empty:
-        st.info("Not enough data for channel stats under current filters.")
-        p = np.nan
-    else:
-        ch_tbl["Share"] = np.where(ch_tbl["Total_Value"].sum() > 0, ch_tbl["Total_Value"] / ch_tbl["Total_Value"].sum(), np.nan)
-        ch_tbl = ch_tbl.sort_values("Total_Value", ascending=False)
-
-        # nice rounding for "Excel look"
-        ch_tbl_disp = ch_tbl.copy()
-        ch_tbl_disp["Total_Value"] = ch_tbl_disp["Total_Value"].round(0)
-        ch_tbl_disp["Avg_Value"] = ch_tbl_disp["Avg_Value"].round(0)
-        ch_tbl_disp["Median_Value"] = ch_tbl_disp["Median_Value"].round(0)
-        ch_tbl_disp["P90_Value"] = ch_tbl_disp["P90_Value"].round(0)
-        ch_tbl_disp["Share"] = (ch_tbl_disp["Share"] * 100).round(1)
-
-        ch_tbl_disp = ch_tbl_disp.rename(columns={
-            "Channel": "Channel",
-            "Orders": "Orders",
-            "Total_Value": f"Total ({metric_name})",
-            "Avg_Value": f"Avg ({metric_name})",
-            "Median_Value": f"Median ({metric_name})",
-            "P90_Value": f"P90 ({metric_name})",
-            "Share": "Share (%)",
-        })
-
-        st.dataframe(ch_tbl_disp, use_container_width=True)
-        st.download_button(
-            "Download channel stats (CSV)",
-            data=ch_tbl_disp.to_csv(index=False).encode("utf-8"),
-            file_name="stats_channel_summary.csv",
-            mime="text/csv",
-            key="dl_stats_channel_summary",
-        )
-
-        # Kruskal test
-        try:
-            from scipy import stats
-        except Exception:
-            stats = None
-
-        if stats is None:
-            p = np.nan
-            st.info("SciPy not available in this environment (tests disabled).")
-        else:
-            grp = (
-                df_stat.dropna(subset=["Channel", metric])
-                .groupby("Channel")[metric]
-                .apply(lambda x: x.dropna().values)
-            )
-            if len(grp) >= 2:
-                _, p = stats.kruskal(*grp.tolist())
-                st.write(
-                    f"p-value: **{_p_fmt(p)}** → "
-                    + ("Yes, typical order values differ across channels." if p < 0.05 else "No strong evidence of difference.")
+                # worst country by avg lag (min sample size)
+                order_col = "Sale ID" if "Sale ID" in lag_df.columns else metric
+                by_cty = (
+                    lag_df.groupby("Country")
+                    .agg(orders=(order_col, "count"), avg_lag=("Ship Lag (days)", "mean"), total=(metric, "sum"))
+                    .reset_index()
                 )
-            else:
-                p = np.nan
-                st.write("Not enough channels in current filters for this test.")
+                by_cty = by_cty[by_cty["orders"] >= 5].sort_values("avg_lag", ascending=False)
+                if not by_cty.empty:
+                    wc = by_cty.iloc[0]
+                    lag_ins.append(f"Worst avg lag (min 5 orders): **{wc['Country']}** at **{wc['avg_lag']:.1f} days**.")
 
-    st.divider()
+                lag_why = [
+                    "Highlights where fulfillment delays cluster so ops fixes happen where they matter most.",
+                    "Combines lag with volume so you don’t waste time optimizing low-impact areas.",
+                ]
 
-    # -----------------------------
-    # 2) Channel mix differs by country? (Chi-square) + Excel tables
-    # -----------------------------
-    st.markdown("### 2) Is channel mix different by country?")
+                lag_recs = []
+                if p90_lag >= 14:
+                    lag_recs.append("p90 lag is high (≥14 days) → prioritize fixes for delayed lanes first (carrier / warehouse / cutoff times).")
+                if mean_lag >= 10:
+                    lag_recs.append("Average lag is high (≥10 days) → review fulfillment workflow and set tighter SLAs.")
+                if neg_lag_rows > 0:
+                    lag_recs.append("Clean or exclude negative lag rows so lag KPIs remain trustworthy.")
+                lag_recs += [
+                    "Fix the biggest delay hotspots first (high lag + meaningful volume).",
+                    "Track lag monthly by country/city to confirm improvements.",
+                ]
 
-    if len(country_totals) == 0:
-        st.info("No country totals available under current filters.")
-        p2 = np.nan
-    else:
-        top_for_test = country_totals.head(min(10, len(country_totals))).index
-        tmp = df_stat.copy()
-        tmp["Country (top)"] = np.where(tmp["Country"].isin(top_for_test), tmp["Country"], "Other")
+                insights_expander("Shipping Lag", bullet(lag_ins), bullet(lag_why), bullet(lag_recs))
+                st.divider()
 
-        ct = pd.crosstab(tmp["Country (top)"], tmp["Channel"])
-
-        if ct.shape[0] >= 2 and ct.shape[1] >= 2:
-            # counts table
-            st.markdown("**Counts (Country × Channel)**")
-            st.dataframe(ct, use_container_width=True)
-            st.download_button(
-                "Download counts table (CSV)",
-                data=ct.to_csv().encode("utf-8"),
-                file_name="stats_country_channel_counts.csv",
-                mime="text/csv",
-                key="dl_stats_counts",
-            )
-
-            # share table (row-normalized)
-            ct_share = ct.div(ct.sum(axis=1).replace(0, np.nan), axis=0) * 100
-            ct_share = ct_share.round(1)
-            st.markdown("**Row Share % (within each country)**")
-            st.dataframe(ct_share, use_container_width=True)
-            st.download_button(
-                "Download share table (CSV)",
-                data=ct_share.to_csv().encode("utf-8"),
-                file_name="stats_country_channel_share_pct.csv",
-                mime="text/csv",
-                key="dl_stats_share",
-            )
-
-            if stats is not None:
-                _, p2, _, _ = stats.chi2_contingency(ct)
-                st.write(
-                    f"p-value: **{_p_fmt(p2)}** → "
-                    + ("Yes, channel mix differs by country." if p2 < 0.05 else "No strong evidence of different mixes.")
-                )
-            else:
-                p2 = np.nan
-        else:
-            p2 = np.nan
-            st.write("Not enough data for this test with current filters.")
-
-    st.divider()
-
-    # -----------------------------
-    # 3) Strongest numeric relationships (Spearman) + Excel table
-    # -----------------------------
-    st.markdown("### 3) Strongest numeric relationships (Spearman)")
-
-    if stats is None:
-        st.info("SciPy not available in this environment (Spearman disabled).")
-    else:
-        driver_candidates = [
-            "Discount (CAD)", "Shipping (CAD)", "Taxes Collected (CAD)",
-            "Color Count (#)", "length", "width", "weight"
-        ]
-        if lag_col is not None:
-            driver_candidates.append(lag_col)
-
-        drivers = [c for c in driver_candidates if c in df_stat.columns]
-        rows = []
-
-        for c in drivers:
-            x = pd.to_numeric(df_stat[c], errors="coerce")
-            y = pd.to_numeric(df_stat[metric], errors="coerce")
-            ok = x.notna() & y.notna()
-            if ok.sum() >= 30:
-                r, pv = stats.spearmanr(x[ok], y[ok])
-                rows.append((c, float(r), float(pv), int(ok.sum())))
-
-        if rows:
-            out = pd.DataFrame(rows, columns=["Variable", "Spearman r", "p-value", "n"])
-            out["|r|"] = out["Spearman r"].abs()
-            out = out.sort_values("|r|", ascending=False).drop(columns=["|r|"]).head(12).reset_index(drop=True)
-
-            out_disp = out.copy()
-            out_disp["Spearman r"] = out_disp["Spearman r"].round(3)
-            out_disp["p-value"] = out_disp["p-value"].apply(_p_fmt)
-
-            st.dataframe(out_disp, use_container_width=True)
-            st.download_button(
-                "Download correlations (CSV)",
-                data=out_disp.to_csv(index=False).encode("utf-8"),
-                file_name="stats_spearman_correlations.csv",
-                mime="text/csv",
-                key="dl_stats_corr",
-            )
-        else:
-            st.write("Not enough data for correlation stats under current filters.")
-
-    # -----------------------------
-    # Dropdown insights (Price Drivers layout)
-    # -----------------------------
-    insights_md = "\n".join([
-        "- Stats help confirm whether chart differences are likely real (not random noise).",
-        "- If significant, treat channel/country strategy as market-specific (not one-size-fits-all).",
-    ])
-    why_md = "This prevents overreacting to small samples and supports decisions with evidence."
-    recs_md = "\n".join([
-        "- If channels differ, prioritize the channels with the best value + volume.",
-        "- If mix differs by country, plan channel strategy per market using the heatmap tab.",
-        "- Use the top 2–3 Spearman drivers as KPIs/filters (don’t overload the dashboard).",
-    ])
-
-    insights_expander("Stats", insights_md, why_md, recs_md)
-    st.divider()
-
-
-    # ======================
-    # TAB 5: Data
-    # ======================
-    with tabs[5]:
-        st.subheader("Clean tables + download")
-
-        colA, colB = st.columns(2)
-
-        with colA:
-            st.markdown("### Top Countries")
-            t = country_totals.reset_index().rename(columns={metric: "Total ($ CAD)"}).head(25)
-            t["Total ($ CAD)"] = t["Total ($ CAD)"].round(0)
-            st.dataframe(rank_df(t).set_index("#"), use_container_width=True)
-
-            st.markdown("### Top Cities (Country + City)")
-            cct = df.groupby(["Country", "City"])[metric].sum().sort_values(ascending=False).head(25).reset_index().rename(columns={metric: "Total ($ CAD)"})
-            cct["Total ($ CAD)"] = cct["Total ($ CAD)"].round(0)
-            st.dataframe(rank_df(cct).set_index("#"), use_container_width=True)
-
-        with colB:
-            st.markdown("### Country × Channel KPI")
-
-            order_col = "Sale ID" if "Sale ID" in df.columns else metric
-            kpi = df.groupby(["Country", "Channel"]).agg(
-                orders=(order_col, "count"),
-                total=(metric, "sum"),
-                avg=(metric, "mean"),
-                median=(metric, "median"),
-                avg_ship_lag=(lag_col, "mean") if lag_col is not None else (metric, "count"),
-            ).reset_index()
-
-            kpi["total"] = kpi["total"].round(0)
-            kpi["avg"] = kpi["avg"].round(0)
-            kpi["median"] = kpi["median"].round(0)
-            if lag_col is not None:
-                kpi["avg_ship_lag"] = kpi["avg_ship_lag"].round(1)
-
-            kpi = kpi.sort_values("total", ascending=False).head(40)
-            kpi = rank_df(kpi).rename(columns={
-                "total": "Total ($ CAD)",
-                "avg": "Avg ($ CAD)",
-                "median": "Median ($ CAD)",
-                "avg_ship_lag": "Avg Ship Lag (days)" if lag_col is not None else "Avg Ship Lag (n/a)",
-            })
-            st.dataframe(kpi.set_index("#"), use_container_width=True)
-
-            st.download_button(
-                "Download filtered data (CSV)",
-                data=df.to_csv(index=False).encode("utf-8"),
-                file_name="filtered_data.csv",
-                mime="text/csv",
-                key="dl_filtered_data",
-            )
-
-        with st.expander("Preview (first 200 rows)"):
-            st.dataframe(df.head(200), use_container_width=True)
-
-        insights_md = "- Tables help you validate the charts and export clean subsets for deeper analysis."
-        why_md = "When you need exact numbers (not just visuals), the KPI tables are the source of truth."
-        recs_md = "\n".join([
-            "- Use Country × Channel KPI to pick which channel to scale in each market.",
-            "- Export the filtered dataset when you want to analyze in Excel/Power BI.",
-        ])
-
-        insights_expander("Data", insights_md, why_md, recs_md)
-        st.divider()
 # -----------------------------
 # TAB 6: Inventory Timing 
 # -----------------------------
@@ -2927,7 +3275,7 @@ def render_inventory_analysis_tab(df_in: pd.DataFrame):
     )
 
     scope_choice = st.selectbox(
-        "Scope of analysis:",
+        "Product Type Selector:",
         [all_label] + product_type_list,
         index=0,
         key=wkey("inv_scope")
@@ -3025,29 +3373,84 @@ def render_inventory_analysis_tab(df_in: pd.DataFrame):
             ):
                 under_best = {"pt": str(pt), "periods": dev["below_periods"], "units": dev["below_units_total"]}
 
+        # -----------------------------
+    # KPIs
+    # -----------------------------
     k1, k2, k3 = st.columns(3)
     k4, k5, k6 = st.columns(3)
 
     k1.metric("Units sold (total)", f"{total_units_sold:,}")
-    k2.metric("Most demanded Product Type", f"{most_pt}", delta=(f"+{most_pct:.1f}%" if most_pt != "N/A" else None))
-    k3.metric("Least demanded Product Type", f"{least_pt}", delta=(f"-{least_pct:.1f}%" if least_pt != "N/A" else None))
+    k2.metric(
+        "Most demanded Product Type",
+        f"{most_pt}",
+        delta=(f"+{most_pct:.1f}%" if most_pt != "N/A" else None),
+    )
+    k3.metric(
+        "Least demanded Product Type",
+        f"{least_pt}",
+        delta=(f"-{least_pct:.1f}%" if least_pt != "N/A" else None),
+    )
     k4.metric("Forecast accuracy (current scope)", forecast_acc_text)
+
     k5.metric(
         "Most above Optimal (1M)",
         f"{over_best['pt']}",
-        delta=(f"{over_best['periods']} months | {over_best['units']} units"
-               if over_best["pt"] != "N/A" and over_best["periods"] > 0 else None)
+        delta=(
+            f"{over_best['periods']} months | {over_best['units']} units"
+            if over_best["pt"] != "N/A" and over_best["periods"] > 0
+            else None
+        ),
     )
+
     k6.metric(
         "Most below Safety (1M)",
         f"{under_best['pt']}",
-        delta=(f"{under_best['periods']} months | {under_best['units']} units"
-               if under_best["pt"] != "N/A" and under_best["periods"] > 0 else None)
+        delta=(
+            f"{under_best['periods']} months | {under_best['units']} units"
+            if under_best["pt"] != "N/A" and under_best["periods"] > 0
+            else None
+        ),
     )
+
+    # -----------------------------
+    # Recommendations (dropdown)
+    # -----------------------------
+    most_delta_txt = (f"+{most_pct:.1f}%" if most_pt != "N/A" else "N/A")
+    least_delta_txt = (f"-{least_pct:.1f}%" if least_pt != "N/A" else "N/A")
+
+    over_delta_txt = (
+        f"{over_best['periods']} months | {over_best['units']} units"
+        if over_best["pt"] != "N/A" and over_best["periods"] > 0
+        else "N/A"
+    )
+    under_delta_txt = (
+        f"{under_best['periods']} months | {under_best['units']} units"
+        if under_best["pt"] != "N/A" and under_best["periods"] > 0
+        else "N/A"
+    )
+
+    with st.expander("Recommendations", expanded=False):
+        st.markdown(
+            f"""
+- **Most demanded Product Type:** **{most_pt}** ({most_delta_txt})  
+  The product with the strongest positive demand trend. It is recommended to **review inventory levels to ensure adequate supply and avoid potential stockouts**.
+
+- **Most above Optimal (1M):** **{over_best['pt']}** ({over_delta_txt})  
+  The product showing the highest fluctuation above the optimal stock level over the last month. It is recommended to **maintain active monitoring to detect atypical demand or stocking behavior**.
+
+- **Least demanded Product Type:** **{least_pt}** ({least_delta_txt})  
+  The product with the strongest negative demand trend. It is recommended to **maintain inventory levels between safety and optimal thresholds to reduce overstock risk**.
+
+- **Most below Safety (1M):** **{under_best['pt']}** ({under_delta_txt})  
+  The product with the highest fluctuation below the safety stock level over the last month. It is recommended to **conduct a deeper investigation into atypical demand patterns or supply disruptions**.
+"""
+        )
 
     st.markdown("---")
 
-    # Chart
+    # -----------------------------
+    # Chart (line chart)
+    # -----------------------------
     last_month_dt = monthly_cnt["Month_dt"].max()
     next_month = last_month_dt + pd.DateOffset(months=1)
 
@@ -3062,7 +3465,7 @@ def render_inventory_analysis_tab(df_in: pd.DataFrame):
     fig_inv.add_trace(go.Scatter(x=ext_months, y=actual_ext, mode="lines+markers", name="Actual Sales (Monthly Items)"))
     fig_inv.add_trace(go.Scatter(
         x=ext_months, y=forecast_ext_plot, mode="lines+markers",
-        name="Forecast (3-Month Moving Average)", line=dict(dash="dash")
+        name="Trending Line", line=dict(dash="dash")
     ))
     fig_inv.add_trace(go.Scatter(
         x=ext_months, y=safety_ext, mode="lines",
@@ -3076,11 +3479,14 @@ def render_inventory_analysis_tab(df_in: pd.DataFrame):
     fig_inv.update_layout(
         xaxis_title="Month",
         yaxis_title="Units",
-        title=f"Monthly Sales vs 3M MA Forecast, Safety (1M) & Optimal (1M) — {scope_title}",
+        title=f"Inventory performance (sales vs optimal & safety level) — {scope_title}",
         height=550
     )
     st.plotly_chart(fig_inv, use_container_width=True)
 
+    # -----------------------------
+    # Insights (dropdown)
+    # -----------------------------
     with st.expander("Insights", expanded=False):
         st.markdown("#### 1) Model used for Safety (minimum) and Optimal (maximum) levels")
         st.markdown(
@@ -3112,8 +3518,9 @@ def render_inventory_analysis_tab(df_in: pd.DataFrame):
             f"**Expected units to be sold in the projected period:** **{int(round(expected_units_horizon))} units**"
         )
 
-
+    # -----------------------------
     # TABLE: STOCK STATUS vs OPTIMAL (3M) + RESTOCK 1M + FORECAST NEXT 3
+    # -----------------------------
     st.markdown("---")
     st.subheader("Stock Status vs 3-Month Optimal Stock (with 1-Month Restock)")
 
@@ -3127,9 +3534,9 @@ def render_inventory_analysis_tab(df_in: pd.DataFrame):
 
     rows = []
     product_type_name = "All Product Types" if scope_choice == all_label else scope_choice
-
     stock = optimal_3m_int
 
+    # --- Historical periods (simulate inventory with restock to 1M optimal) ---
     for _, row_ in monthly_cnt.iterrows():
         period_label = row_["Month_dt"].strftime("%Y-%m")
         total_sales = int(row_["Sales_Count"])
@@ -3147,6 +3554,7 @@ def render_inventory_analysis_tab(df_in: pd.DataFrame):
 
         stock += restock_to_opt_1m
 
+    # --- Future projected periods (next H_TABLE months) ---
     forecast_next_val_int = int(round(forecast_next_val))
 
     for k in range(1, H_TABLE + 1):
@@ -3169,7 +3577,7 @@ def render_inventory_analysis_tab(df_in: pd.DataFrame):
 
     table_df = pd.DataFrame(rows)
 
-
+    # --- Attribute suggestions (based on historical sales prior to each period) ---
     attr_cols = ["Species", "Grade", "Finish", "Dominant Color", "Color Count (#)"]
     df_attr = df_scope.copy()
 
@@ -3214,6 +3622,49 @@ def render_inventory_analysis_tab(df_in: pd.DataFrame):
         "Re-stock to Optimal 1M (units)",
     ] + attr_cols
 
+    # --- Next projected period (the one shown in the line chart) ---
+    next_period_dt = monthly_cnt["Month_dt"].max() + pd.DateOffset(months=1)
+    next_period_label = next_period_dt.strftime("%Y-%m")
+
+    next_row = table_df.loc[table_df["Period"] == next_period_label].head(1)
+
+    if not next_row.empty:
+        next_restock_units = int(next_row["Re-stock to Optimal 1M (units)"].iloc[0])
+        specs_txt = (
+            f"Species: **{str(next_row['Species'].iloc[0])}**, "
+            f"Grade: **{str(next_row['Grade'].iloc[0])}**, "
+            f"Finish: **{str(next_row['Finish'].iloc[0])}**, "
+            f"Dominant Color: **{str(next_row['Dominant Color'].iloc[0])}**, "
+            f"Color Count: **{str(next_row['Color Count (#)'].iloc[0])}**"
+        )
+    else:
+        next_restock_units = None
+        specs_txt = None
+
+    # --- Explanation dropdown (only text) ---
+    with st.expander("How to read this table", expanded=False):
+        st.markdown(
+            """
+This table uses a **3-month optimal stock level** as a reference and simulates current inventory levels against that target.  
+The **Restock** column shows the number of units recommended to purchase in order to reach the optimal level.  
+The table highlights which attributes are suggested for replenishment based on recent sales trends.
+"""
+        )
+
+        if next_restock_units is not None and specs_txt is not None:
+            st.markdown(
+                f"""
+For the **next projected period ({next_period_label})**, the recommended replenishment to reach the optimal level is **{next_restock_units} units**, targeting: {specs_txt}.
+"""
+            )
+        else:
+            st.markdown(
+                f"""
+For the **next projected period ({next_period_label})**, there is not enough data to recommend a restock quantity and attribute specifications.
+"""
+            )
+
+    # --- Table visible by default (outside expander) ---
     st.dataframe(table_df[cols_show], use_container_width=True)
 
     csv_data = table_df[cols_show].to_csv(index=False).encode("utf-8")
@@ -3232,8 +3683,8 @@ with tab_timing:
     st.subheader("Inventory")
 
     # 6 tabs 
-    tab0, tab1, tab2, tab3, tab4, tab5 = st.tabs(
-        ["Inventory Forecast", "Timing Curve (CDF)", "Monthly Volume", "Product Speed", "Insights", "Summary"]
+    tab0, tab1, tab2 = st.tabs(
+        ["Inventory Forecast", "Timing Curve (CDF)", "Monthly Volume"]
     )
 
     # -----------------------------
@@ -3292,24 +3743,28 @@ with tab_timing:
     # -----------------------------
     # SubTab Timing Curve (CDF)
     # -----------------------------
+    from matplotlib.ticker import PercentFormatter
+
     with tab1:
         st.subheader("📈 Shipment Timing Curve (CDF)")
         st.write(
-            "This curve shows the cumulative proportion of total shipments completed over time. "
-            "It helps identify when most inventory movement occurs during the year."
+            "This curve shows the cumulative percentage of total shipments completed over time. "
+            "It helps identify when most inventory movement occurs."
         )
 
         if monthly_series.empty or monthly_series.sum() == 0:
-            st.info("Not enough shipment/timing data to plot Inventory Timing under the current filters.")
+            st.info("Not enough shipment/timing data to plot under the current filters.")
         else:
             cdf = monthly_series.cumsum() / monthly_series.sum()
 
             fig, ax = plt.subplots(figsize=(10, 4))
             ax.plot(cdf.index, cdf.values, marker="o")
             ax.set_title("Cumulative Distribution of Shipments")
-            ax.set_ylabel("Proportion of Total Shipments")
+            ax.set_ylabel("Percentage of Total Shipments")
+            ax.yaxis.set_major_formatter(PercentFormatter(1.0))
             ax.set_ylim(0, 1.05)
             ax.grid(alpha=0.25)
+
             st.pyplot(fig, use_container_width=True)
 
     # -----------------------------
@@ -3317,6 +3772,7 @@ with tab_timing:
     # -----------------------------
     with tab2:
         st.subheader("📅 Monthly Shipping Volume")
+
         if monthly_series.empty:
             st.info("Not enough monthly shipment data under current filters.")
         else:
@@ -3325,83 +3781,53 @@ with tab_timing:
             ax2.set_title("Monthly Shipments (Seasonality)")
             ax2.set_ylabel("Units Shipped")
             ax2.grid(alpha=0.25, axis="y")
+
             st.pyplot(fig2, use_container_width=True)
 
-    # -----------------------------
-    # SubTab Product Speed
-    # -----------------------------
-    with tab3:
-        st.subheader("📊 Fast vs Slow Moving Products")
-        if product_volume.empty:
-            st.info("Not enough product shipment data under current filters.")
-        else:
-            fig3, ax3 = plt.subplots(figsize=(10, 4))
-            product_volume.plot(kind="barh", ax=ax3)
-            ax3.set_title("Units Shipped by Product Type")
-            ax3.set_xlabel("Units Shipped")
-            ax3.grid(alpha=0.25, axis="x")
-            st.pyplot(fig3, use_container_width=True)
+    st.divider()
 
-    # -----------------------------
-    # SubTab Insights
-    # -----------------------------
-    with tab4:
-        st.subheader("💡 Key Insights")
+    with st.expander("💡 Insights & Executive Summary", expanded=False):
 
-        if monthly_series.empty:
-            st.info("Not enough shipment data to compute insights under current filters.")
-        else:
-            trend_df = monthly_series.reset_index()
-            trend_df.columns = ["__month_dt", "__units"]
-            trend_df["t"] = np.arange(len(trend_df))
+        # ---- Trend Insight ----
+        trend_df = monthly_series.reset_index()
+        trend_df.columns = ["Month", "Units"]
+        trend_df["t"] = np.arange(len(trend_df))
 
-            slope = np.polyfit(trend_df["t"], trend_df["__units"], 1)[0] if len(trend_df) > 1 else 0
-            trend_label = "Increasing" if slope > 0.05 else "Decreasing" if slope < -0.05 else "Stable"
+        slope = np.polyfit(trend_df["t"], trend_df["Units"], 1)[0] if len(trend_df) > 1 else 0
+        trend_label = "Increasing" if slope > 0.05 else "Decreasing" if slope < -0.05 else "Stable"
 
-            top_products = product_volume.sort_values(ascending=False).head(3)
-            slow_products = product_volume.head(3)
+        st.markdown("### 📌 Key Insights")
+        st.write(f"- Overall shipment trend: **{trend_label}**")
+        st.write(f"- Peak shipment month: **{peak_month}**")
+        st.write("- The CDF shows when most inventory movement occurs during the year.")
+        st.write("- Monthly volume highlights seasonality and demand clustering.")
 
-            st.markdown(f"**Overall shipment trend:** {trend_label}")
-            st.markdown(f"**Peak shipping month:** {peak_month}")
+        st.markdown("### 🧭 Recommendations")
+        st.write("- Prepare inventory ahead of peak shipment periods.")
+        st.write("- Align procurement cycles with observed shipment timing.")
+        st.write("- Review low-activity months to optimize holding costs.")
+        st.write("- Consider capturing *Received Date* to enable inventory aging analysis.")
 
-            st.markdown("**Top-moving product types:**")
-            for p, v in top_products.items():
-                st.write(f"- {p}: {int(v):,} units")
+        st.markdown("### 📄 Executive Summary")
+        st.write(
+            "This section consolidates timing insights derived from shipment behavior. "
+            "The cumulative timing curve explains *when* inventory moves, while monthly volume "
+            "reveals *how much* moves over time. Together, these insights support better "
+            "inventory planning, replenishment, and operational efficiency."
+        )
 
-            st.markdown("**Slow-moving product types:**")
-            for p, v in slow_products.items():
-                st.write(f"- {p}: {int(v):,} units")
 
-            st.markdown("### 📌 Recommendations")
-            st.write("- Increase safety stock ahead of peak shipping periods.")
-            st.write("- Review slow-moving products to reduce holding costs.")
-            st.write("- Align procurement cycles with observed shipment timing.")
-            st.write("- Consider adding *Received Date* data to enable true inventory aging metrics.")
-
-    # -----------------------------
-    # SubTab Summary
-    # -----------------------------
-    with tab5:
-        st.subheader("📄 Executive Summary")
-        st.markdown(f"""
-        **Inventory Performance Overview (Filtered View)**
-
-        - **Total units shipped:** {total_units:,}
-        - **Peak operational period:** {peak_month}
-        - **Average monthly shipments:** {avg_monthly:.1f} units
-
-        This tab focuses on **inventory movement timing** for stocking, planning, and operational efficiency.
-        """)
 # -----------------------------
 # End of TAB 6: Inventory Timing 
 # -----------------------------
+
 # ============================
 # TAB 7: OWNERSHIP
 # ============================
 #-----Helpers--------#
 
 def render_ownership_analysis_tab(df_in: pd.DataFrame):
-    st.markdown("### Ownership Analysis – Revenue, Units, Ticket & Efficiency")
+    st.markdown("### Ownership Analysis – Revenue, Units, Sale Amount & Efficiency")
 
     df = _ensure_month_and_ownership(df_in)
 
@@ -3426,10 +3852,9 @@ def render_ownership_analysis_tab(df_in: pd.DataFrame):
         monthly_revenue["Consigned"] = 0.0
     monthly_revenue["Total"] = monthly_revenue.sum(axis=1)
 
-    # KPIs
-    c1, c2, c3, c4, c5 = st.columns(5)
+    # KPIs (REMOVE "Total Sales (CAD)")
+    c1, c2, c3, c4 = st.columns(4)
 
-    total_sales_cad = float(df["Price (CAD)"].sum())
     revenue_by_ownership = df.groupby("Ownership")["Price (CAD)"].sum().to_dict()
     total_revenue = sum(revenue_by_ownership.values())
 
@@ -3445,15 +3870,14 @@ def render_ownership_analysis_tab(df_in: pd.DataFrame):
     growth_series = monthly_revenue_sorted["Total"].pct_change().dropna()
     avg_monthly_growth_pct = float(growth_series.mean() * 100) if not growth_series.empty else 0.0
 
-    c1.metric("Total Sales (CAD)", f"${total_sales_cad:,.2f}")
-    c2.metric("Owned Revenue %", f"{owned_pct:.1f}%")
-    c3.metric("Consigned Revenue %", f"{consigned_pct:.1f}%")
-    c4.metric("Avg Monthly Revenue Growth", f"{avg_monthly_growth_pct:.1f}%")
+    c1.metric("Owned Revenue %", f"{owned_pct:.1f}%")
+    c2.metric("Consigned Revenue %", f"{consigned_pct:.1f}%")
+    c3.metric("Avg Monthly Revenue Growth", f"{avg_monthly_growth_pct:.1f}%")
 
     # Commercial ROI KPI (Revenue per Sale) + dynamic "best"
     df_roi_kpi = df.dropna(subset=["Ownership", "Price (CAD)", "Sale ID"]).copy()
     if df_roi_kpi.empty:
-        c5.metric("Commercial ROI Advantage", "N/A", delta="Not enough data")
+        c4.metric("Commercial ROI Advantage", "N/A", delta="Not enough data")
     else:
         roi_base_kpi = (
             df_roi_kpi.groupby("Ownership", as_index=False)
@@ -3462,7 +3886,7 @@ def render_ownership_analysis_tab(df_in: pd.DataFrame):
         roi_base_kpi = roi_base_kpi[roi_base_kpi["Sales"] > 0]
         if len(roi_base_kpi) < 2:
             only_row = roi_base_kpi.iloc[0]
-            c5.metric("Commercial ROI Advantage", "N/A", delta=f"Only `{only_row['Ownership']}` has valid sales")
+            c4.metric("Commercial ROI Advantage", "N/A", delta=f"Only `{only_row['Ownership']}` has valid sales")
         else:
             roi_base_kpi["Revenue_per_Sale"] = roi_base_kpi["Revenue_CAD"] / roi_base_kpi["Sales"]
             best = roi_base_kpi.loc[roi_base_kpi["Revenue_per_Sale"].idxmax()]
@@ -3470,14 +3894,19 @@ def render_ownership_analysis_tab(df_in: pd.DataFrame):
             if float(worst["Revenue_per_Sale"]) > 0:
                 ratio = float(best["Revenue_per_Sale"]) / float(worst["Revenue_per_Sale"])
                 pct_advantage = (ratio - 1.0) * 100.0
-                c5.metric("Commercial ROI Advantage", f"{pct_advantage:,.0f}%", delta=f"Best ROI: {best['Ownership']}")
+                c4.metric("Commercial ROI Advantage", f"{pct_advantage:,.0f}%", delta=f"Best ROI: {best['Ownership']}")
             else:
-                c5.metric("Commercial ROI Advantage", "∞", delta=f"Best ROI: {best['Ownership']}")
+                c4.metric("Commercial ROI Advantage", "∞", delta=f"Best ROI: {best['Ownership']}")
 
     st.markdown("---")
     st.subheader("Monthly Trend: Owned vs Consigned")
 
-    view_option = st.radio("Select metric to display:", ["Revenue (CAD)", "Sales Count"], horizontal=True, key=wkey("own_metric"))
+    view_option = st.radio(
+        "Select metric to display:",
+        ["Revenue (CAD)", "Sales Count"],
+        horizontal=True,
+        key=wkey("own_metric")
+    )
 
     # Revenue time series
     rev_df = monthly_revenue[["Owned", "Consigned"]].copy().reset_index()
@@ -3511,7 +3940,7 @@ def render_ownership_analysis_tab(df_in: pd.DataFrame):
         name_owned = "Owned Sales Count"
         name_cons = "Consigned Sales Count"
 
-    # Forecast (3M MA)
+    # Trending Line (3M MA)
     if len(base_df) >= 3:
         last_month = base_df["Month_dt"].max()
         next_month = last_month + pd.DateOffset(months=1)
@@ -3535,13 +3964,27 @@ def render_ownership_analysis_tab(df_in: pd.DataFrame):
     fig_line = go.Figure()
     fig_line.add_trace(go.Scatter(x=base_df["Month_dt"], y=base_df["Owned"], mode="lines+markers", name=name_owned))
     fig_line.add_trace(go.Scatter(x=base_df["Month_dt"], y=base_df["Consigned"], mode="lines+markers", name=name_cons))
-    fig_line.add_trace(go.Scatter(x=x_forecast, y=y_owned_forecast, mode="lines+markers", name=f"{name_owned} – Forecast (3M MA)", line=dict(dash="dash")))
-    fig_line.add_trace(go.Scatter(x=x_forecast, y=y_cons_forecast, mode="lines+markers", name=f"{name_cons} – Forecast (3M MA)", line=dict(dash="dash")))
+
+    # Rename "Forecast (3M MA)" -> "Trending Line"
+    fig_line.add_trace(go.Scatter(
+        x=x_forecast,
+        y=y_owned_forecast,
+        mode="lines+markers",
+        name=f"{name_owned} – Trending Line",
+        line=dict(dash="dash")
+    ))
+    fig_line.add_trace(go.Scatter(
+        x=x_forecast,
+        y=y_cons_forecast,
+        mode="lines+markers",
+        name=f"{name_cons} – Trending Line",
+        line=dict(dash="dash")
+    ))
 
     fig_line.update_layout(
         xaxis_title="Month",
         yaxis_title=y_label,
-        legend_title="Ownership / Forecast",
+        legend_title="Ownership / Trend",
         height=450
     )
 
@@ -3551,6 +3994,9 @@ def render_ownership_analysis_tab(df_in: pd.DataFrame):
 
     with col_fc2:
         st.markdown("#### Forecasted Units by Product Type, Grade & Ownership (Next Month)")
+
+        selected_pt = None
+        total_all = None
 
         if view_option != "Sales Count":
             st.info("Switch to 'Sales Count' to see units forecast by Product Type, Grade & Ownership.")
@@ -3575,7 +4021,9 @@ def render_ownership_analysis_tab(df_in: pd.DataFrame):
                     if monthly_pt_own_grade.empty or monthly_pt_own_grade["Month"].nunique() < 3:
                         st.write("Not enough data (≥ 3 months) to compute a 3-month forecast for this product type.")
                     else:
-                        monthly_pt_own_grade["Month_dt"] = pd.to_datetime(monthly_pt_own_grade["Month"], format="%Y-%m", errors="coerce")
+                        monthly_pt_own_grade["Month_dt"] = pd.to_datetime(
+                            monthly_pt_own_grade["Month"], format="%Y-%m", errors="coerce"
+                        )
                         monthly_pt_own_grade = monthly_pt_own_grade.dropna(subset=["Month_dt"]).sort_values("Month_dt")
 
                         unique_months = monthly_pt_own_grade["Month_dt"].drop_duplicates().sort_values()
@@ -3602,10 +4050,19 @@ def render_ownership_analysis_tab(df_in: pd.DataFrame):
 
                         ownership_options = totals_by_own["Ownership"].tolist()
                         if ownership_options:
-                            selected_own = st.radio("Show grade detail for:", ownership_options, horizontal=True, key=wkey("own_detail"))
+                            selected_own = st.radio(
+                                "Show grade detail for:",
+                                ownership_options,
+                                horizontal=True,
+                                key=wkey("own_detail")
+                            )
                             detail_filtered = forecast_by_own_grade[forecast_by_own_grade["Ownership"] == selected_own]
                             st.markdown(f"**Detail by Grade – {selected_own}**")
-                            st.dataframe(detail_filtered[["Grade", "Forecast_Units"]], hide_index=True, use_container_width=True)
+                            st.dataframe(
+                                detail_filtered[["Grade", "Forecast_Units"]],
+                                hide_index=True,
+                                use_container_width=True
+                            )
 
         with st.expander("Insights: Forecast model (Next Month)", expanded=False):
             st.markdown(
@@ -3614,8 +4071,15 @@ def render_ownership_analysis_tab(df_in: pd.DataFrame):
                 "- Requires **≥ 3 distinct months** for the selected Product Type."
             )
 
+            # Add final recommendation line (uses selected Product Type + total_all)
+            if selected_pt is not None and total_all is not None:
+                st.markdown(
+                    f"- **Recommendations:** Due the trending line, we recommend ensuring at least **{int(total_all)} units** "
+                    f"for **{selected_pt}** for the next month, and splitting it by the ownership detailed above."
+                )
+
     st.markdown("---")
-    st.subheader("Commercial ROI and Monthly Mean Ticket by Ownership")
+    st.subheader("Commercial ROI and Monthly Mean Sale Amount by Ownership")
 
     df_roi = df.copy()
     df_roi = df_roi.dropna(subset=["Ownership", "Price (CAD)", "Sale ID"])
@@ -3631,13 +4095,13 @@ def render_ownership_analysis_tab(df_in: pd.DataFrame):
     roi_base["Revenue_CAD"] = roi_base["Revenue_CAD"].round(2)
     roi_base["Revenue_per_Sale"] = roi_base["Revenue_per_Sale"].round(2)
 
-    mean_ticket_monthly = (
+    mean_sale_amount_monthly = (
         df.groupby(["Month", "Ownership"])["Price (CAD)"]
           .mean()
-          .reset_index(name="Mean_Ticket_CAD")
+          .reset_index(name="Mean_Sale_Amount_CAD")
     )
-    mean_ticket_monthly["Month_dt"] = pd.to_datetime(mean_ticket_monthly["Month"], format="%Y-%m", errors="coerce")
-    mean_ticket_monthly = mean_ticket_monthly.dropna(subset=["Month_dt"]).sort_values("Month_dt")
+    mean_sale_amount_monthly["Month_dt"] = pd.to_datetime(mean_sale_amount_monthly["Month"], format="%Y-%m", errors="coerce")
+    mean_sale_amount_monthly = mean_sale_amount_monthly.dropna(subset=["Month_dt"]).sort_values("Month_dt")
 
     col_roi, col_mean = st.columns(2)
     with col_roi:
@@ -3655,24 +4119,24 @@ def render_ownership_analysis_tab(df_in: pd.DataFrame):
         st.plotly_chart(fig_roi, use_container_width=True)
 
     with col_mean:
-        fig_mean_ticket_month = px.bar(
-            mean_ticket_monthly,
+        fig_mean_sale_amount_month = px.bar(
+            mean_sale_amount_monthly,
             x="Month_dt",
-            y="Mean_Ticket_CAD",
+            y="Mean_Sale_Amount_CAD",
             color="Ownership",
             barmode="group",
-            labels={"Month_dt": "Month", "Mean_Ticket_CAD": "Mean Ticket (CAD)", "Ownership": "Ownership"},
-            title="Monthly Mean Ticket by Ownership",
+            labels={"Month_dt": "Month", "Mean_Sale_Amount_CAD": "Mean Sale Amount (CAD)", "Ownership": "Ownership"},
+            title="Monthly Mean Sale Amount by Ownership",
         )
-        fig_mean_ticket_month.update_layout(xaxis_tickformat="%Y-%m")
-        st.plotly_chart(fig_mean_ticket_month, use_container_width=True)
+        fig_mean_sale_amount_month.update_layout(xaxis_tickformat="%Y-%m")
+        st.plotly_chart(fig_mean_sale_amount_month, use_container_width=True)
 
     st.markdown("#### Summary (Commercial ROI vs Volume)")
     with st.expander("What is Commercial ROI and how is it calculated?", expanded=False):
         st.markdown(
             "- **Commercial ROI (in this dashboard)** is a *sales-efficiency proxy*, not an accounting ROI.\n"
             "- We define it as **Revenue per Sale**: **Total Revenue (CAD) / Number of Sales**.\n"
-            "- It compares **ticket power** vs **volume**, but does not include costs, margins, or inventory investment."
+            "- It compares **sale amount power** vs **volume**, but does not include costs, margins, or inventory investment."
         )
 
     st.dataframe(roi_base[["Ownership", "Sales", "Revenue_CAD", "Revenue_per_Sale"]], use_container_width=True)
@@ -3682,15 +4146,14 @@ def render_ownership_analysis_tab(df_in: pd.DataFrame):
         if float(worst["Revenue_per_Sale"]) > 0:
             ratio = float(best["Revenue_per_Sale"]) / float(worst["Revenue_per_Sale"])
             st.markdown(
-                f"**Interpretation:** On average, each `{best['Ownership']}` sale generates "
+                f"**Recommendation:** On average, each `{best['Ownership']}` sale generates "
                 f"**{ratio:,.1f}×** more revenue than each `{worst['Ownership']}` sale."
             )
         else:
             st.markdown(
-                f"**Interpretation:** `{best['Ownership']}` shows the highest commercial ROI "
+                f"**Recommendation:** `{best['Ownership']}` shows the highest commercial ROI "
                 f"(revenue per sale). `{worst['Ownership']}` has very low or zero ROI."
             )
-
 
     # Product profiles
     st.markdown("---")
@@ -3704,8 +4167,12 @@ def render_ownership_analysis_tab(df_in: pd.DataFrame):
             df_combo[c] = "N/A"
         df_combo[c] = df_combo[c].fillna("N/A")
 
+    # Capture descriptions for recommendations
+    top_mean_desc = {}      # { "Owned": "desc", "Consigned": "desc" }
+    most_freq_desc = {}     # { "Owned": "desc", "Consigned": "desc" }
+
     with col_prof1:
-        st.markdown("#### Top Product Profile by Mean Ticket per Ownership")
+        st.markdown("#### Top Product Profile by Mean Sale Amount per Ownership")
 
         if df_combo.empty:
             st.info("No product data available to compute top product profiles.")
@@ -3713,7 +4180,7 @@ def render_ownership_analysis_tab(df_in: pd.DataFrame):
             group_cols_own = ["Ownership"] + group_cols
             hv_agg_own = (
                 df_combo.groupby(group_cols_own)["Price (CAD)"]
-                        .agg(Mean_Ticket_CAD="mean", Sales_Count="count")
+                        .agg(Mean_Sale_Amount_CAD="mean", Sales_Count="count")
                         .reset_index()
             )
 
@@ -3730,7 +4197,7 @@ def render_ownership_analysis_tab(df_in: pd.DataFrame):
                     if subset.empty:
                         continue
 
-                    idx = subset["Mean_Ticket_CAD"].idxmax()
+                    idx = subset["Mean_Sale_Amount_CAD"].idxmax()
                     row = subset.loc[idx]
 
                     parts = []
@@ -3744,11 +4211,13 @@ def render_ownership_analysis_tab(df_in: pd.DataFrame):
                         parts.append(str(v))
 
                     combo_label = " – ".join(parts)
-                    mean_val = float(row["Mean_Ticket_CAD"])
+                    mean_val = float(row["Mean_Sale_Amount_CAD"])
                     sales_n = int(row["Sales_Count"])
 
+                    top_mean_desc[own_label] = combo_label
+
                     st.metric(
-                        label=f"{own_label} – Top Mean Ticket",
+                        label=f"{own_label} – Top Mean Sale Amount",
                         value=f"${mean_val:,.2f}",
                         delta=f"{combo_label} | Total sales: {sales_n}"
                     )
@@ -3791,18 +4260,41 @@ def render_ownership_analysis_tab(df_in: pd.DataFrame):
                 combo_label = " – ".join(parts)
                 sales_n = int(row["Sales_Count"])
 
+                most_freq_desc[own_label] = combo_label
+
                 st.metric(
                     label=f"{own_label} – Most Frequent Profile",
                     value=f"{sales_n} sales",
                     delta=combo_label
                 )
 
+    # Recommendations dropdown for product profiles
+    with st.expander("Recommendations: Product Profiles", expanded=False):
+        owned_top = top_mean_desc.get("Owned", "N/A")
+        cons_top = top_mean_desc.get("Consigned", "N/A")
+        owned_freq = most_freq_desc.get("Owned", "N/A")
+        cons_freq = most_freq_desc.get("Consigned", "N/A")
+
+        st.markdown(
+            f"""
+It is recommended to encourage sales of the following product profiles, as they represent the highest **average sale amount** per ownership:
+
+- **Owned – Top Mean Sale Amount:** {owned_top}  
+- **Consigned – Top Mean Sale Amount:** {cons_top}
+
+It is recommended to maintain an optimal inventory level per ownership for the following profiles, as they represent the **highest sales frequency**:
+
+- **Owned – Most Frequent Profile:** {owned_freq}  
+- **Consigned – Most Frequent Profile:** {cons_freq}
+"""
+        )
+
     st.markdown("---")
-    st.subheader("Ticket Distribution by Ownership")
+    st.subheader("Sale Amount Distribution by Ownership")
 
     df_eff = df.dropna(subset=["Price (CAD)"]).copy()
     if df_eff.empty:
-        st.info("No data available to plot ticket distribution.")
+        st.info("No data available to plot sale amount distribution.")
     else:
         fig_violin = px.violin(
             df_eff,
@@ -3810,8 +4302,8 @@ def render_ownership_analysis_tab(df_in: pd.DataFrame):
             y="Price (CAD)",
             box=True,
             points="all",
-            labels={"Ownership": "Ownership", "Price (CAD)": "Ticket (Price per Sale, CAD)"},
-            title="Distribution of Ticket per Ownership (Price per Sale)",
+            labels={"Ownership": "Ownership", "Price (CAD)": "Sale Amount (Price per Sale, CAD)"},
+            title="Distribution of Sale Amount per Ownership (Price per Sale)",
         )
         fig_violin.update_layout(height=500)
         st.plotly_chart(fig_violin, use_container_width=True)
@@ -3827,7 +4319,12 @@ def render_ownership_analysis_tab(df_in: pd.DataFrame):
     st.markdown("---")
     st.subheader("Month-over-Month % Change by Product Type & Ownership")
 
-    metric_choice_pt = st.radio("Metric:", ["Sales Count", "Revenue (CAD)"], horizontal=True, key=wkey("pt_own_mom_metric"))
+    metric_choice_pt = st.radio(
+        "Metric:",
+        ["Sales Count", "Revenue (CAD)"],
+        horizontal=True,
+        key=wkey("pt_own_mom_metric")
+    )
 
     df_mom_pt = df.dropna(subset=["Product Type"]).copy()
     if df_mom_pt["Month"].nunique() < 2:
@@ -3872,18 +4369,54 @@ def render_ownership_analysis_tab(df_in: pd.DataFrame):
         if not sub_owned.empty:
             best_owned = sub_owned.loc[sub_owned["Avg_MoM_Growth"].idxmax()]
             worst_owned = sub_owned.loc[sub_owned["Avg_MoM_Growth"].idxmin()]
+
             st.markdown("#### Owned – Long-Term Performance")
-            st.metric(label=f"Best Avg MoM ({metric_choice_pt})", value=f"{best_owned['Avg_MoM_Growth']:+.2f}%", delta=f"{best_owned['Product Type']}")
-            st.metric(label=f"Worst Avg MoM ({metric_choice_pt})", value=f"{worst_owned['Avg_MoM_Growth']:+.2f}%", delta=f"{worst_owned['Product Type']}")
+            st.metric(
+                label=f"Best Avg MoM ({metric_choice_pt})",
+                value=f"{best_owned['Avg_MoM_Growth']:+.2f}%",
+                delta=f"{best_owned['Product Type']}"
+            )
+            st.metric(
+                label=f"Worst Avg MoM ({metric_choice_pt})",
+                value=f"{worst_owned['Avg_MoM_Growth']:+.2f}%",
+                delta=f"{worst_owned['Product Type']}"
+            )
+
+            with st.expander("Recommendations – Owned (Long-Term Performance)", expanded=False):
+                st.markdown(
+                    f"""
+**{best_owned['Product Type']}** shows the strongest upward trend over time. It is recommended to maintain an optimal inventory allocation.  
+
+**{worst_owned['Product Type']}** shows the most consistent downward trend over time. It is recommended to review seasonality and reassess inventory levels.
+"""
+                )
 
     with kpi_col2:
         sub_con = avg_growth_df[avg_growth_df["Ownership"] == "Consigned"]
         if not sub_con.empty:
             best_con = sub_con.loc[sub_con["Avg_MoM_Growth"].idxmax()]
             worst_con = sub_con.loc[sub_con["Avg_MoM_Growth"].idxmin()]
+
             st.markdown("#### Consigned – Long-Term Performance")
-            st.metric(label=f"Best Avg MoM ({metric_choice_pt})", value=f"{best_con['Avg_MoM_Growth']:+.2f}%", delta=f"{best_con['Product Type']}")
-            st.metric(label=f"Worst Avg MoM ({metric_choice_pt})", value=f"{worst_con['Avg_MoM_Growth']:+.2f}%", delta=f"{worst_con['Product Type']}")
+            st.metric(
+                label=f"Best Avg MoM ({metric_choice_pt})",
+                value=f"{best_con['Avg_MoM_Growth']:+.2f}%",
+                delta=f"{best_con['Product Type']}"
+            )
+            st.metric(
+                label=f"Worst Avg MoM ({metric_choice_pt})",
+                value=f"{worst_con['Avg_MoM_Growth']:+.2f}%",
+                delta=f"{worst_con['Product Type']}"
+            )
+
+            with st.expander("Recommendations – Consigned (Long-Term Performance)", expanded=False):
+                st.markdown(
+                    f"""
+**{best_con['Product Type']}** shows the strongest upward trend over time. It is recommended to maintain an optimal inventory allocation.  
+
+**{worst_con['Product Type']}** shows the most consistent downward trend over time. It is recommended to review seasonality and reassess inventory levels.
+"""
+                )
 
     st.markdown("Each cell shows the **% change vs previous month** for that Product Type & Ownership.")
     st.dataframe(pct_clean.style.format(lambda v: "—" if pd.isna(v) else f"{v:+.1f}%"), use_container_width=True)
@@ -3898,6 +4431,7 @@ def render_ownership_analysis_tab(df_in: pd.DataFrame):
         mime="text/csv",
     )
 
+
 with tab_ownership:
     # Integrated from sales_analysis.py: Ownership Analysis logic
     render_ownership_analysis_tab(f)
@@ -3905,16 +4439,41 @@ with tab_ownership:
 # ============================
 # End of TAB 7: OWNERSHIP
 # ============================
+
+
 # -----------------------------
 # TAB: Seasonality (upgrade)
 # -----------------------------
 with tab_seasonality:
-    st.markdown("## Seasonality Analysis")
-    st.caption("Visualization")
 
+    # =========================================================
+    # Header Row: Title + Caption (LEFT) | Time Grain (RIGHT)
+    # =========================================================
+    h_left, h_right = st.columns([0.75, 0.25], vertical_alignment="top")
+
+    with h_left:
+        st.markdown("## Seasonality Analysis")
+        st.caption(
+            "These three views collectively reveal where pricing sensitivity impacts performance, "
+            "which months are most vulnerable due to product dependency, and which products remain "
+            "reliable campaign candidates during seasonal slowdowns."
+        )
+
+    with h_right:
+        grain = st.radio(
+            "Time Grain",
+            ["Monthly", "Weekly"],
+            index=0,
+            horizontal=True,
+            key=pkey("seasonality_time_grain"),
+        )
+
+    # =========================================================
+    # Base dataframe
+    # =========================================================
     t_df = f.copy()
 
-    # ---- pick revenue + price columns (same logic as your Price Drivers tab) ----
+    # ---- pick revenue + price columns ----
     if "Net Sales" in t_df.columns:
         revenue_col = "Net Sales"
     elif "Price (CAD)" in t_df.columns:
@@ -3924,11 +4483,13 @@ with tab_seasonality:
 
     price_col = "Price (CAD)" if "Price (CAD)" in t_df.columns else revenue_col
 
-    # ---- ensure Month exists ----
+    # ---- ensure Date / Month exist ----
+    if "Date" in t_df.columns:
+        t_df["Date"] = pd.to_datetime(t_df["Date"], errors="coerce")
+
     if "Month" in t_df.columns:
         t_df["Month"] = pd.to_datetime(t_df["Month"], errors="coerce")
     elif "Date" in t_df.columns:
-        t_df["Date"] = pd.to_datetime(t_df["Date"], errors="coerce")
         t_df["Month"] = t_df["Date"].dt.to_period("M").dt.to_timestamp()
     else:
         t_df["Month"] = pd.NaT
@@ -3937,200 +4498,724 @@ with tab_seasonality:
     t_df[revenue_col] = pd.to_numeric(t_df[revenue_col], errors="coerce")
     t_df[price_col] = pd.to_numeric(t_df[price_col], errors="coerce")
 
-    # ---- 3 subtabs (exact set you want) ----
+    # =========================================================
+    # Normalize Period based on Time Grain
+    # =========================================================
+    if grain == "Weekly":
+        if "Date" not in t_df.columns:
+            st.warning("Weekly view requires a 'Date' column. Falling back to Monthly.")
+            grain = "Monthly"
+        else:
+            t_df["PeriodStart"] = t_df["Date"].dt.to_period("W-MON").dt.start_time
+            t_df["PeriodLabel"] = t_df["PeriodStart"].dt.strftime("Wk of %b %d, %Y")
+            PERIOD_NAME = "Week"
+            X_TICKFORMAT = "%b %d<br>%Y"
+            X_DTICK = "D7"
+
+    if grain == "Monthly":
+        t_df["PeriodStart"] = pd.to_datetime(t_df["Month"], errors="coerce").dt.to_period("M").dt.to_timestamp()
+        t_df["PeriodLabel"] = t_df["PeriodStart"].dt.strftime("%b %Y")
+        PERIOD_NAME = "Month"
+        X_TICKFORMAT = "%b %Y"
+        X_DTICK = "M1"
+
+    # =========================================================
+    # Subtabs (unchanged)
+    # =========================================================
     s1, s2, s3 = st.tabs(
         [
             "Price Elasticity",
-            "Fragile Months (Underperformance Scenario)",
-            "Campaign Opportunities (Slow Months)",
+            "Revenue Fragility",
+            "Seasonal Campaign Opportunities",
         ]
     )
 
+    # 🔽 Your existing Subtab 1 / 2 / 3 code continues here
+
     # =========================================================
-    # SUBTAB 1 — Price Elasticity
+    # SUBTAB 1 — Seasonal Price Sensitivity (Period-based)
+    # X = PeriodStart | Y = Revenue | Bubble = Avg Price | Color = Grade
+    # Hover: Flag Type + Flag Reason ONLY when flagged
     # =========================================================
     with s1:
-        st.subheader("Price Elasticity")
+        t1, t2 = st.columns([0.85, 0.15], vertical_alignment="center")
+        with t1:
+            st.subheader("Seasonal Price Sensitivity & Revenue Impact")
+        with t2:
+            if st.button("❓ Help", key=pkey("seasonality_help_btn")):
+                show_seasonality_help()
 
-        base = (
-            t_df.dropna(subset=["Month", price_col, revenue_col])
-            .groupby("Month", as_index=False)
-            .agg(
-                Avg_Price=(price_col, "mean"),
-                Revenue=(revenue_col, "sum"),
-            )
-            .sort_values("Month")
-        )
-
-        if base.empty:
-            st.info("Not enough Month + Price + Revenue data for Price Elasticity.")
+        if "Product Type" not in t_df.columns or "Grade" not in t_df.columns:
+            st.info("Need both 'Product Type' and 'Grade' columns to build this view.")
+        elif "PeriodStart" not in t_df.columns:
+            st.info(f"Need a time field (Month/Date) to build the {PERIOD_NAME.lower()} view.")
         else:
-            # safe band + overpricing signals (derived from monthly avg price)
-            q25 = float(base["Avg_Price"].quantile(0.25))
-            q75 = float(base["Avg_Price"].quantile(0.75))
-            q90 = float(base["Avg_Price"].quantile(0.90))
+            df_el = t_df.dropna(
+                subset=["PeriodStart", "Product Type", "Grade", price_col, revenue_col]
+            ).copy()
 
-            c1, c2 = st.columns(2)
-            with c1:
-                st.metric(
-                    "Safe pricing band (avg monthly price)",
-                    f"{q25:,.0f} – {q75:,.0f} CAD",
+            if df_el.empty:
+                st.info(f"Not enough {PERIOD_NAME} + Product Type + Grade + Price + Revenue data.")
+            else:
+                # Filter: Product Type
+                pt_list = sorted(df_el["Product Type"].astype(str).unique().tolist())
+                pt_choice = st.selectbox(
+                    "Filter by Product Type",
+                    options=["All"] + pt_list,
+                    index=0,
+                    key=pkey("seasonality_pt_filter"),
                 )
-            with c2:
-                st.metric(
-                    "Overpricing signals",
-                    f"{q90:,.0f} CAD",
-                )
+                df_view = df_el if pt_choice == "All" else df_el[df_el["Product Type"].astype(str) == pt_choice]
 
-            base["MonthName"] = base["Month"].dt.strftime("%b")
-            month_order = base["Month"].dt.strftime("%b").tolist()
+                if df_view.empty:
+                    st.info("No data for the selected Product Type.")
+                else:
+                    # Aggregate: Period x Grade
+                    base = (
+                        df_view.groupby(["PeriodStart", "Grade"], as_index=False)
+                        .agg(
+                            Avg_Price=(price_col, "mean"),
+                            Revenue=(revenue_col, "sum"),
+                            Volume=(revenue_col, "size"),
+                        )
+                        .sort_values("PeriodStart")
+                    )
+                    if base.empty:
+                        st.info("No data after grouping.")
+                    else:
+                        base["Grade"] = base["Grade"].astype(str)
+                        base["PeriodLabel"] = pd.to_datetime(base["PeriodStart"]).dt.strftime(
+                            "Wk of %b %d, %Y" if grain == "Weekly" else "%b %Y"
+                        )
 
-            st.markdown("**How does pricing relate to revenue across months?**")
+                        grade_order = ["AAA", "AA", "A", "B"]
+                        present = [g for g in grade_order if g in base["Grade"].unique()]
+                        if present:
+                            base["Grade"] = pd.Categorical(base["Grade"], categories=present, ordered=True)
+                        base["GradeStr"] = base["Grade"].astype(str)
 
-            fig = px.scatter(
-                base,
-                x="Avg_Price",
-                y="Revenue",
-                color="MonthName",
-                category_orders={"MonthName": month_order},
-                title="",
-            )
-            fig.update_layout(
-                xaxis_title="Average Price (CAD)",
-                yaxis_title="Revenue (CAD)",
-                legend_title_text="Month",
-            )
-            fig.update_traces(marker=dict(size=10))
-            fig = style_fig(fig, height=520)
-            st.plotly_chart(fig, use_container_width=True, key=pkey("tim_season_scatter"))
+                        # Rolling baselines (window=3 periods; weekly = 3 weeks, monthly = 3 months)
+                        base_sorted = base.sort_values(["GradeStr", "PeriodStart"]).copy()
+                        base_sorted["Roll_Avg_Price"] = (
+                            base_sorted.groupby("GradeStr")["Avg_Price"]
+                            .transform(lambda x: x.rolling(3, min_periods=2).mean())
+                        )
+                        base_sorted["Roll_Revenue"] = (
+                            base_sorted.groupby("GradeStr")["Revenue"]
+                            .transform(lambda x: x.rolling(3, min_periods=2).mean())
+                        )
+                        base_sorted["Roll_Volume"] = (
+                            base_sorted.groupby("GradeStr")["Volume"]
+                            .transform(lambda x: x.rolling(3, min_periods=2).mean())
+                        )
 
-            st.markdown(
-                """
-**1. Do higher prices lead to higher revenue, or does volume dominate?**  
-If “higher price = higher revenue” were always true, you’d see a clean upward diagonal.  
-If points cluster without a strong upward pattern, revenue is likely driven more by **volume** (or product mix) than price alone.
-"""
-            )
+                        base_sorted["Price_vs_Roll_%"] = np.where(
+                            base_sorted["Roll_Avg_Price"] > 0,
+                            (base_sorted["Avg_Price"] - base_sorted["Roll_Avg_Price"]) / base_sorted["Roll_Avg_Price"],
+                            np.nan,
+                        )
+                        base_sorted["Revenue_vs_Roll_%"] = np.where(
+                            base_sorted["Roll_Revenue"] > 0,
+                            (base_sorted["Revenue"] - base_sorted["Roll_Revenue"]) / base_sorted["Roll_Revenue"],
+                            np.nan,
+                        )
+                        base_sorted["Volume_vs_Roll_%"] = np.where(
+                            base_sorted["Roll_Volume"] > 0,
+                            (base_sorted["Volume"] - base_sorted["Roll_Volume"]) / base_sorted["Roll_Volume"],
+                            np.nan,
+                        )
+
+                        base_sorted["Flag_PriceResistance"] = (
+                            (base_sorted["Price_vs_Roll_%"] >= 0.05) &
+                            (base_sorted["Revenue_vs_Roll_%"] <= -0.10) &
+                            (base_sorted["Volume_vs_Roll_%"] <= -0.10)
+                        )
+
+                        base_sorted["Flag Reason"] = ""
+                        m = base_sorted["Flag_PriceResistance"]
+                        base_sorted.loc[m, "Flag Reason"] = (
+                            "Avg Price ↑ "
+                            + (base_sorted.loc[m, "Price_vs_Roll_%"] * 100).round(1).astype(str)
+                            + "%, Revenue ↓ "
+                            + (base_sorted.loc[m, "Revenue_vs_Roll_%"] * 100).round(1).astype(str)
+                            + "%, Volume ↓ "
+                            + (base_sorted.loc[m, "Volume_vs_Roll_%"] * 100).round(1).astype(str)
+                            + f"% vs rolling 3-{PERIOD_NAME.lower()} average (same grade)"
+                        )
+
+                        flags = base_sorted[base_sorted["Flag_PriceResistance"]].copy()
+                        flags["Trigger"] = "Price Resistance (High Confidence)"
+                        if not flags.empty:
+                            flags["PeriodLabel"] = pd.to_datetime(flags["PeriodStart"]).dt.strftime(
+                                "Wk of %b %d, %Y" if grain == "Weekly" else "%b %Y"
+                            )
+
+                        if flags.empty:
+                            st.success("No high-confidence pricing resistance detected for the selected filter.")
+                        else:
+                            st.warning("High-confidence pricing resistance detected — review ⚠ markers and hover for details.")
+
+                        # Add flag info back into base (for bubble hover)
+                        base["Flag Type"] = ""
+                        base["Flag Reason"] = ""
+                        if not flags.empty:
+                            trig_map = flags.set_index(["PeriodStart", "GradeStr"])["Trigger"].to_dict()
+                            reas_map = flags.set_index(["PeriodStart", "GradeStr"])["Flag Reason"].to_dict()
+
+                            base["Flag Type"] = base.apply(
+                                lambda r: trig_map.get((r["PeriodStart"], str(r["GradeStr"])), ""),
+                                axis=1,
+                            )
+                            base["Flag Reason"] = base.apply(
+                                lambda r: reas_map.get((r["PeriodStart"], str(r["GradeStr"])), ""),
+                                axis=1,
+                            )
+
+                        # Bubble chart
+                        fig = px.scatter(
+                            base,
+                            x="PeriodStart",
+                            y="Revenue",
+                            color="GradeStr",
+                            size="Avg_Price",
+                            size_max=55,
+                            title="",
+                        )
+
+                        # Revenue line (total across grades)
+                        rev_line = (
+                            base.groupby("PeriodStart", as_index=False)["Revenue"]
+                            .sum()
+                            .sort_values("PeriodStart")
+                        )
+                        fig.add_scatter(
+                            x=rev_line["PeriodStart"],
+                            y=rev_line["Revenue"],
+                            mode="lines+markers",
+                            name="Total Revenue Trend",
+                            line=dict(width=3),
+                            hovertemplate="<b>%{x|%b %d, %Y}</b><br>Total Revenue: $%{y:,.0f}<extra></extra>",
+                        )
+
+                        # Flag markers
+                        if not flags.empty:
+                            fig.add_scatter(
+                                x=flags["PeriodStart"],
+                                y=flags["Revenue"],
+                                mode="markers",
+                                name="⚠ Flagged",
+                                marker=dict(size=14, symbol="x"),
+                                customdata=np.column_stack([
+                                    flags["GradeStr"].astype(str),
+                                    flags["Flag Reason"].astype(str),
+                                    flags["Trigger"].astype(str),
+                                ]),
+                                hovertemplate=(
+                                    "<b>%{x|%b %d, %Y}</b><br>"
+                                    "Grade: %{customdata[0]}<br>"
+                                    "<b>Flag Type:</b> %{customdata[2]}<br>"
+                                    "<b>Flag Reason:</b> %{customdata[1]}"
+                                    "<extra></extra>"
+                                ),
+                            )
+
+                        fig.update_layout(
+                            xaxis_title=f"{PERIOD_NAME} (Date)",
+                            yaxis_title="Revenue (CAD)",
+                            legend_title_text="Grade",
+                            hovermode="closest",
+                        )
+                        fig.update_xaxes(type="date", tickformat=X_TICKFORMAT, dtick=X_DTICK)
+                        fig.update_yaxes(tickprefix="$", separatethousands=True)
+
+                        # Style first
+                        fig = style_fig(fig, height=600)
+
+                        # ✅ Force bubble hover AFTER style_fig (flag fields only appear when flagged)
+                        base_plot = base.copy()
+                        base_plot["GradeStr"] = base_plot["GradeStr"].astype(str)
+
+                        flag_type = base_plot["Flag Type"].astype(str).fillna("")
+                        flag_reason = base_plot["Flag Reason"].astype(str).fillna("")
+                        flag_block_type = np.where(flag_type != "", "<b>Flag Type:</b> " + flag_type + "<br>", "")
+                        flag_block_reason = np.where(flag_reason != "", "<b>Flag Reason:</b> " + flag_reason, "")
+
+                        # customdata: [Volume, FlagTypeBlock, FlagReasonBlock, Avg_Price]
+                        base_cd = np.column_stack([
+                            base_plot["Volume"].astype(float),
+                            flag_block_type,
+                            flag_block_reason,
+                            base_plot["Avg_Price"].astype(float),
+                        ])
+
+                        for tr in fig.data:
+                            if getattr(tr, "mode", "") == "markers" and tr.name not in ["⚠ Flagged"]:
+                                grade_name = str(tr.name)
+                                mask = (base_plot["GradeStr"] == grade_name)
+                                tr.customdata = base_cd[mask.values]
+                                tr.hovertemplate = (
+                                    "<b>%{x|%b %d, %Y}</b><br>"
+                                    f"Grade: {grade_name}<br>"
+                                    "Revenue: $%{y:,.0f}<br>"
+                                    "Avg Price: $%{customdata[3]:,.2f}<br>"
+                                    "Volume (txn): %{customdata[0]:,.0f}"
+                                    "<br><br>"
+                                    "%{customdata[1]}%{customdata[2]}"
+                                    "<extra></extra>"
+                                )
+
+                        # Keep revenue line on top
+                        names = [tr.name for tr in fig.data]
+                        if "Total Revenue Trend" in names:
+                            idx = names.index("Total Revenue Trend")
+                            fig.data = tuple(list(fig.data[:idx]) + list(fig.data[idx+1:]) + [fig.data[idx]])
+
+                        st.plotly_chart(
+                            fig,
+                            use_container_width=True,
+                            key=pkey("seasonality_elasticity_bubble_line_flagged_reason_hiconf"),
+                        )
 
     # =========================================================
-    # SUBTAB 2 — Fragile Months if One Product Type Underperforms
+    # SUBTAB 2 — Fragile Periods (PERCENT + SEASONALITY + DROPDOWN MODE)
+    # (hover fixed to not truncate; re-applied after style_fig)
     # =========================================================
     with s2:
-        st.subheader("Which Months Are Fragile if One Product Type Underperforms?")
-        st.caption("Revenue & Loss by Month (Simulated Underperformance Scenario)")
+        h1, h2 = st.columns([0.85, 0.15], vertical_alignment="center")
+        with h1:
+            st.subheader("Dependency risk on critical products across seasonal revenue cycles")
+        with h2:
+            if st.button("❓ Help", key=pkey("fragility_help_btn")):
+                show_fragility_help()
 
         if "Product Type" not in t_df.columns:
             st.info("Need 'Product Type' to build the fragility scenario.")
         else:
-            df2 = t_df.dropna(subset=["Month", "Product Type", revenue_col]).copy()
+            df2 = t_df.dropna(subset=["PeriodStart", "Product Type", revenue_col]).copy()
             if df2.empty:
                 st.info("Not enough data for the fragility scenario.")
             else:
-                # most critical product type = top revenue contributor
-                pt_tot = df2.groupby("Product Type")[revenue_col].sum().sort_values(ascending=False)
-                critical_pt = str(pt_tot.index[0]) if len(pt_tot) else "Unknown"
-
-                monthly_total = df2.groupby("Month")[revenue_col].sum()
-                monthly_critical = df2[df2["Product Type"] == critical_pt].groupby("Month")[revenue_col].sum()
-
-                out = pd.DataFrame(
-                    {
-                        "Month": monthly_total.index,
-                        "Total": monthly_total.values,
-                        "At_Risk": monthly_critical.reindex(monthly_total.index).fillna(0).values,
-                    }
-                ).sort_values("Month")
-
-                out["Stable"] = (out["Total"] - out["At_Risk"]).clip(lower=0)
-                out["MonthName"] = pd.to_datetime(out["Month"]).dt.strftime("%b")
-
-                stacked = out.melt(
-                    id_vars=["Month", "MonthName"],
-                    value_vars=["At_Risk", "Stable"],
-                    var_name="Part",
-                    value_name="Revenue",
-                )
-                stacked["Part"] = stacked["Part"].map(
-                    {"At_Risk": critical_pt, "Stable": "Stable Revenue"}
+                mode = st.selectbox(
+                    "Critical Product Method",
+                    options=[
+                        "Overall critical product (top revenue across the whole dataset)",
+                        "Seasonal critical product (top revenue per period)",
+                    ],
+                    index=0,
+                    key=pkey("fragility_critical_mode"),
                 )
 
-                fig = px.bar(
-                    stacked,
-                    x="MonthName",
-                    y="Revenue",
-                    color="Part",
-                    barmode="stack",
-                    title="",
+                # Totals per period
+                totals = df2.groupby("PeriodStart")[revenue_col].sum().sort_index()
+                out = pd.DataFrame({"PeriodStart": totals.index, "Total": totals.values}).sort_values("PeriodStart")
+                out["PeriodLabel"] = out["PeriodStart"].dt.strftime("Wk of %b %d, %Y" if grain == "Weekly" else "%b %Y")
+
+                # Always create columns
+                out["Critical_PT"] = pd.Series([np.nan] * len(out), index=out.index)
+                out["Critical_Grade"] = pd.Series([np.nan] * len(out), index=out.index)
+
+                critical_pt = "—"
+                critical_grade = "—"
+
+                if mode.startswith("Overall critical"):
+                    pt_tot = df2.groupby("Product Type")[revenue_col].sum().sort_values(ascending=False)
+                    critical_pt = str(pt_tot.index[0]) if len(pt_tot) else "Unknown"
+
+                    if "Grade" in df2.columns:
+                        g_tot = (
+                            df2[df2["Product Type"] == critical_pt]
+                            .dropna(subset=["Grade"])
+                            .groupby("Grade")[revenue_col]
+                            .sum()
+                            .sort_values(ascending=False)
+                        )
+                        critical_grade = str(g_tot.index[0]) if len(g_tot) else "N/A"
+                    else:
+                        critical_grade = "N/A"
+
+                    critical_by_period = (
+                        df2[df2["Product Type"] == critical_pt]
+                        .groupby("PeriodStart")[revenue_col]
+                        .sum()
+                    )
+                    out["At_Risk"] = critical_by_period.reindex(out["PeriodStart"]).fillna(0).values
+                    out["Critical_PT"] = critical_pt
+                    out["Critical_Grade"] = critical_grade
+
+                    at_risk_label = f"At Risk: {critical_pt}"
+                    if critical_grade not in ["—", "N/A"]:
+                        at_risk_label += f" (Top Grade: {critical_grade})"
+                else:
+                    mpt = (
+                        df2.groupby(["PeriodStart", "Product Type"], as_index=False)[revenue_col]
+                        .sum()
+                        .sort_values(["PeriodStart", revenue_col], ascending=[True, False])
+                    )
+                    top_mpt = mpt.groupby("PeriodStart", as_index=False).head(1).copy()
+                    top_mpt = top_mpt.rename(columns={revenue_col: "At_Risk", "Product Type": "Critical_PT"})
+
+                    if top_mpt.empty:
+                        out["At_Risk"] = 0.0
+                        out["Critical_PT"] = "Unknown"
+                        out["Critical_Grade"] = "N/A"
+                    else:
+                        if "Grade" in df2.columns:
+                            mpg = (
+                                df2.dropna(subset=["Grade"])
+                                .groupby(["PeriodStart", "Product Type", "Grade"], as_index=False)[revenue_col]
+                                .sum()
+                                .sort_values(["PeriodStart", "Product Type", revenue_col], ascending=[True, True, False])
+                            )
+                            top_grade = mpg.groupby(["PeriodStart", "Product Type"], as_index=False).head(1)
+                            top_grade = top_grade.rename(columns={"Grade": "Critical_Grade"})
+                            top_mpt = top_mpt.merge(
+                                top_grade[["PeriodStart", "Product Type", "Critical_Grade"]],
+                                left_on=["PeriodStart", "Critical_PT"],
+                                right_on=["PeriodStart", "Product Type"],
+                                how="left",
+                            ).drop(columns=["Product Type"])
+                        else:
+                            top_mpt["Critical_Grade"] = "N/A"
+
+                        out = out.merge(
+                            top_mpt[["PeriodStart", "At_Risk", "Critical_PT", "Critical_Grade"]],
+                            on="PeriodStart",
+                            how="left",
+                            suffixes=("", "_m"),
+                        )
+
+                        # ✅ If merge created suffixed columns, use them
+                        if "Critical_PT_m" in out.columns:
+                            out["Critical_PT"] = out["Critical_PT_m"].combine_first(out["Critical_PT"])
+                            out.drop(columns=["Critical_PT_m"], inplace=True)
+
+                        if "Critical_Grade_m" in out.columns:
+                            out["Critical_Grade"] = out["Critical_Grade_m"].combine_first(out["Critical_Grade"])
+                            out.drop(columns=["Critical_Grade_m"], inplace=True)
+
+                        # ✅ Now safe to fill
+                        out["At_Risk"] = out["At_Risk"].fillna(0.0)
+                        out["Critical_PT"] = out["Critical_PT"].fillna("Unknown")
+                        out["Critical_Grade"] = out["Critical_Grade"].fillna("N/A")
+
+
+
+                    at_risk_label = "At Risk: Per-period #1 Product"
+
+                out["At_Risk_Share"] = np.where(out["Total"] > 0, out["At_Risk"] / out["Total"], 0.0)
+                out["Other_Share"] = (1.0 - out["At_Risk_Share"]).clip(lower=0.0)
+
+                avg_total = float(out["Total"].mean()) if len(out) else 0.0
+                out["Seasonality_Index"] = np.where(avg_total > 0, out["Total"] / avg_total, np.nan)
+
+                risk_share_thresh = st.slider(
+                    "Seasonal Risk Threshold (At Risk %)",
+                    min_value=10,
+                    max_value=80,
+                    value=35,
+                    step=5,
+                    key=pkey("frag_risk_thresh"),
+                ) / 100.0
+                out["Seasonal_Risk"] = (out["At_Risk_Share"] >= risk_share_thresh) & (out["Seasonality_Index"] < 1.0)
+
+                c1, c2, c3 = st.columns(3)
+                with c1:
+                    st.metric(f"Avg {PERIOD_NAME.lower()} revenue baseline", f"${avg_total:,.0f}" if avg_total else "—")
+                with c2:
+                    st.metric("Seasonal risk threshold", f"{int(risk_share_thresh*100)}%")
+                with c3:
+                    if mode.startswith("Overall critical"):
+                        st.metric("Overall critical product / top grade", f"{critical_pt} / {critical_grade}")
+                    else:
+                        st.metric("Critical product method", "Per-period (seasonal)")
+
+                fig = make_subplots(specs=[[{"secondary_y": True}]])
+
+                fig.add_trace(
+                    go.Bar(
+                        x=out["PeriodLabel"],
+                        y=out["At_Risk_Share"],
+                        name=at_risk_label,
+                        customdata=np.column_stack([
+                            out["Critical_PT"].astype(str),
+                            out["Critical_Grade"].astype(str),
+                        ]),
+                    ),
+                    secondary_y=False,
                 )
+                fig.add_trace(
+                    go.Bar(
+                        x=out["PeriodLabel"],
+                        y=out["Other_Share"],
+                        name="Total Revenue",
+                    ),
+                    secondary_y=False,
+                )
+                fig.add_trace(
+                    go.Scatter(
+                        x=out["PeriodLabel"],
+                        y=out["Seasonality_Index"],
+                        mode="lines+markers",
+                        name=f"Seasonality Index ({PERIOD_NAME} vs Avg)",
+                    ),
+                    secondary_y=True,
+                )
+
+                risk_periods = out[out["Seasonal_Risk"]]
+                if not risk_periods.empty:
+                    for _, r in risk_periods.iterrows():
+                        fig.add_annotation(
+                            x=r["PeriodLabel"],
+                            y=0.98,
+                            xref="x",
+                            yref="y",
+                            text="⚠ Seasonal Risk",
+                            showarrow=False,
+                            yanchor="top",
+                        )
+
                 fig.update_layout(
-                    xaxis_title="Month",
-                    yaxis_title="Revenue (CAD)",
-                    legend_title_text="Most critical product type",
+                    barmode="stack",
+                    xaxis_title=f"{PERIOD_NAME} (Period)",
+                    legend_title_text="Legend",
+                    hovermode="x unified",
                 )
-                fig.update_yaxes(tickprefix="$", separatethousands=True)
-                fig = style_fig(fig, height=420)
-                st.plotly_chart(fig, use_container_width=True, key=pkey("tim_fragile_bar"))
-
-                st.markdown(
-                    f"""
-This visual shows how vulnerable each month’s revenue is if one key product type underperforms.
-
-- **Gray** = revenue that remains stable.  
-- **Blue (at risk)** = revenue that depends heavily on **{critical_pt}**.
-
-**Decision-making tip:**  
-Months with a larger “at risk” segment are **strong but fragile**—protect those months by diversifying mix, building backups, and planning inventory/marketing earlier.
-"""
+                fig.update_yaxes(
+                    title_text="Share of Total Revenue (%)",
+                    tickformat=".0%",
+                    range=[0, 1],
+                    secondary_y=False,
                 )
+                fig.update_yaxes(
+                    title_text=f"Seasonality Index (1.0 = Avg {PERIOD_NAME.lower()})",
+                    tickformat=".2f",
+                    secondary_y=True,
+                )
+
+                fig = style_fig(fig, height=520)
+
+                # ✅ Re-apply hover templates AFTER style_fig (and inject at_risk_label correctly)
+                fig.data[0].hovertemplate = (
+                    "<b>%{x}</b><br>"
+                    "{at_risk_label}: %{y:.0%}<br>"
+                    "Critical Product: %{customdata[0]}<br>"
+                    "Top Grade: %{customdata[1]}"
+                    "<extra></extra>"
+                )
+                fig.data[1].hovertemplate = (
+                    "<b>%{x}</b><br>"
+                    "Remaining Share: %{y:.0%}"
+                    "<extra></extra>"
+                )
+                fig.data[2].hovertemplate = (
+                    "<b>%{x}</b><br>"
+                    "Seasonality Index: %{y:.2f}"
+                    "<extra></extra>"
+                )
+
+                st.plotly_chart(fig, use_container_width=True, key=pkey("tim_fragile_bar_pct_plus_seasonality_line"))
 
     # =========================================================
-    # SUBTAB 3 — Campaign Opportunities in Slow Months (Heatmap)
+    # SUBTAB 3 — Seasonal Campaign Opportunities (Ranked Heatmap + Opportunity Score in Hover)
+    # Uses same PeriodStart/Label + slow-period selection by SeasonalityIndex
     # =========================================================
     with s3:
-        st.subheader("Campaign Opportunities in Slow Months")
+        h1, h2 = st.columns([0.86, 0.14], vertical_alignment="center")
+        with h1:
+            st.subheader("Products that consistently capture demand during below-average revenue periods")
+        with h2:
+            if st.button("❓ Help", key=pkey("seasonality_help_btns")):
+                show_opportunity_help()
 
         if "Product Type" not in t_df.columns:
-            st.info("Need 'Product Type' to build the campaign opportunities heatmap.")
+            st.info("Need 'Product Type' to build campaign opportunity insights.")
         else:
-            df3 = t_df.dropna(subset=["Month", "Product Type", revenue_col]).copy()
+            df3 = t_df.dropna(subset=["PeriodStart", "Product Type", revenue_col]).copy()
             if df3.empty:
-                st.info("Not enough data for the heatmap.")
+                st.info("Not enough data to analyze campaign opportunities.")
             else:
-                # pick the slowest 4 months by total revenue (matches your screenshot style)
-                m_tot = df3.groupby("Month")[revenue_col].sum().sort_values()
-                slow_months = m_tot.head(4).index.tolist()
+                # Period label already available; keep consistent
+                df3["PeriodLabel"] = df3["PeriodStart"].dt.strftime("Wk of %b %d, %Y" if grain == "Weekly" else "%b %Y")
 
-                sub = df3[df3["Month"].isin(slow_months)].copy()
-                sub["MonthNum"] = pd.to_datetime(sub["Month"]).dt.month
-
-                mix = (
-                    sub.groupby(["Product Type", "MonthNum"], as_index=False)[revenue_col]
+                # Totals + Seasonality Index
+                monthly = (
+                    df3.groupby("PeriodStart", as_index=False)[revenue_col]
                     .sum()
-                    .rename(columns={revenue_col: "Value"})
+                    .rename(columns={revenue_col: "TotalRevenue"})
+                    .sort_values("PeriodStart")
                 )
-                totals = mix.groupby("MonthNum", as_index=False)["Value"].sum().rename(columns={"Value": "MonthTotal"})
-                mix = mix.merge(totals, on="MonthNum", how="left")
-                mix["Share"] = np.where(mix["MonthTotal"] > 0, mix["Value"] / mix["MonthTotal"], 0)
+                avg_period = float(monthly["TotalRevenue"].mean()) if len(monthly) else 0.0
+                monthly["SeasonalityIndex"] = np.where(avg_period > 0, monthly["TotalRevenue"] / avg_period, np.nan)
+                monthly["PeriodLabel"] = monthly["PeriodStart"].dt.strftime("Wk of %b %d, %Y" if grain == "Weekly" else "%b %Y")
 
-                pv = mix.pivot_table(index="Product Type", columns="MonthNum", values="Share", fill_value=0)
+                c1, c2, c3 = st.columns([0.4, 0.3, 0.3])
+                with c1:
+                    slow_idx = st.slider(
+                        f"Slow-period threshold (Seasonality Index) — {PERIOD_NAME}",
+                        min_value=0.6,
+                        max_value=1.0,
+                        value=0.9,
+                        step=0.05,
+                        key=pkey("camp_slow_idx"),
+                    )
+                with c2:
+                    top_n = st.slider(
+                        f"Number of slow periods to analyze — {PERIOD_NAME}",
+                        min_value=3,
+                        max_value=24 if grain == "Weekly" else 12,
+                        value=8 if grain == "Weekly" else 6,
+                        step=1,
+                        key=pkey("camp_top_n"),
+                    )
+                with c3:
+                    metric = st.radio(
+                        "Heatmap metric",
+                        ["Share of Period (%)", "Revenue (CAD)"],
+                        index=0,
+                        key=pkey("camp_metric"),
+                    )
 
-                hm = px.imshow(
-                    pv,
-                    aspect="auto",
-                    labels=dict(x="Month", y="Product Type", color="Share of Month"),
-                    title="",
+                slow_periods = (
+                    monthly[monthly["SeasonalityIndex"] < slow_idx]
+                    .sort_values("TotalRevenue")
+                    .head(top_n)
+                    .sort_values("PeriodStart")
                 )
-                hm = style_fig(hm, height=320)
-                st.plotly_chart(hm, use_container_width=True, key=pkey("tim_campaign_hm"))
 
-                st.markdown(
-                    """
-This heatmap shows which product types are best campaign opportunities during **slow months**.
+                if slow_periods.empty:
+                    st.info("No periods meet the selected slow-period criteria.")
+                else:
+                    period_order = slow_periods["PeriodLabel"].tolist()
 
-- Darker cells = a bigger share of that month’s revenue (stronger candidates).
-- Use this to plan **bundles**, **promotions**, and **content** around product types that reliably show up when sales are softer.
-"""
-                )
+                    sub = df3[df3["PeriodStart"].isin(slow_periods["PeriodStart"])].copy()
+
+                    mix = (
+                        sub.groupby(["Product Type", "PeriodStart"], as_index=False)[revenue_col]
+                        .sum()
+                        .rename(columns={revenue_col: "Revenue"})
+                    )
+
+                    totals = (
+                        mix.groupby("PeriodStart", as_index=False)["Revenue"]
+                        .sum()
+                        .rename(columns={"Revenue": "PeriodTotal"})
+                    )
+                    mix = mix.merge(totals, on="PeriodStart", how="left")
+                    mix["Share"] = np.where(mix["PeriodTotal"] > 0, mix["Revenue"] / mix["PeriodTotal"], 0.0)
+                    mix["PeriodLabel"] = mix["PeriodStart"].dt.strftime("Wk of %b %d, %Y" if grain == "Weekly" else "%b %Y")
+
+                    # Pivot
+                    if metric == "Share of Period (%)":
+                        pv = (
+                            mix.pivot_table(
+                                index="Product Type",
+                                columns="PeriodLabel",
+                                values="Share",
+                                fill_value=0.0,
+                            )
+                            .reindex(columns=period_order)
+                        )
+                    else:
+                        pv = (
+                            mix.pivot_table(
+                                index="Product Type",
+                                columns="PeriodLabel",
+                                values="Revenue",
+                                fill_value=0.0,
+                            )
+                            .reindex(columns=period_order)
+                        )
+
+                    # Ranking
+                    prod_stats = (
+                        mix.groupby("Product Type", as_index=False)
+                        .agg(
+                            Avg_Share=("Share", "mean"),
+                            Total_Revenue=("Revenue", "sum"),
+                            Periods_Present=("PeriodStart", "nunique"),
+                        )
+                    )
+                    total_periods = len(slow_periods)
+                    prod_stats["Consistency_%"] = np.where(
+                        total_periods > 0,
+                        prod_stats["Periods_Present"] / total_periods,
+                        0.0,
+                    )
+                    prod_stats["Opportunity_Score"] = (
+                        prod_stats["Consistency_%"] * 0.6 +
+                        prod_stats["Avg_Share"] * 0.4
+                    )
+                    prod_stats = prod_stats.sort_values("Opportunity_Score", ascending=False).reset_index(drop=True)
+                    prod_stats["Rank"] = prod_stats.index + 1
+
+                    rank_label_map = {
+                        row["Product Type"]: f"{int(row['Rank'])}. {row['Product Type']}"
+                        for _, row in prod_stats.iterrows()
+                    }
+
+                    pv_ranked = pv.reindex(prod_stats["Product Type"].tolist()).copy()
+                    pv_ranked.index = pv_ranked.index.map(lambda x: rank_label_map.get(x, x))
+
+                    color_label = "Share of Period" if metric == "Share of Period (%)" else "Revenue (CAD)"
+                    fig = px.imshow(
+                        pv_ranked,
+                        aspect="auto",
+                        color_continuous_scale="Blues",
+                        labels=dict(
+                            x=f"Slow {PERIOD_NAME} (Period)",
+                            y="Product Type (Ranked)",
+                            color=color_label,
+                        ),
+                        title="",
+                    )
+
+                    if metric == "Share of Period (%)":
+                        fig.update_coloraxes(colorbar_tickformat=".0%")
+                    else:
+                        fig.update_coloraxes(colorbar_tickprefix="$", colorbar_separatethousands=True)
+
+                    fig = style_fig(fig, height=520)
+
+                    opp_score_map = prod_stats.set_index("Product Type")["Opportunity_Score"].to_dict()
+                    rank_map = prod_stats.set_index("Product Type")["Rank"].to_dict()
+
+                    row_products = [
+                        label.split(". ", 1)[1] if ". " in label else label
+                        for label in pv_ranked.index.tolist()
+                    ]
+                    row_customdata = np.column_stack([
+                        [rank_map.get(p, np.nan) for p in row_products],
+                        [opp_score_map.get(p, np.nan) for p in row_products],
+                    ])
+
+                    rows, cols = pv_ranked.shape
+                    customdata = np.repeat(row_customdata[:, None, :], cols, axis=1)
+
+                    heat = fig.data[0]
+                    heat.customdata = customdata
+
+                    if metric == "Share of Period (%)":
+                        heat.hovertemplate = (
+                            "<b>%{y}</b><br>"
+                            "Period: %{x}<br>"
+                            "Share of Period: %{z:.0%}<br>"
+                            "Rank: #%{customdata[0]:.0f}<br>"
+                            "Opportunity Score: %{customdata[1]:.3f}"
+                            "<extra></extra>"
+                        )
+                    else:
+                        heat.hovertemplate = (
+                            "<b>%{y}</b><br>"
+                            "Period: %{x}<br>"
+                            "Revenue: $%{z:,.0f}<br>"
+                            "Rank: #%{customdata[0]:.0f}<br>"
+                            "Opportunity Score: %{customdata[1]:.3f}"
+                            "<extra></extra>"
+                        )
+
+                    st.plotly_chart(fig, use_container_width=True, key=pkey("camp_heatmap_ranked_hover_score"))
+
+
 
 # -----------------------------
 # TAB: Compliance (DIR expanders + metric tiles) — Chart 1 & 3 removed
