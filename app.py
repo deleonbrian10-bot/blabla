@@ -264,25 +264,21 @@ def _fig_to_compact_csv(fig, max_rows: int = 1200) -> str:
 
 
 # --- Capture charts rendered on the current page ---
-if "_ai_figs" not in st.session_state:
-    st.session_state["_ai_figs"] = []
+# Reset each rerun so the chart picker only shows charts rendered *this run* (i.e., on the current page).
+st.session_state["_ai_figs"] = []
 
-try:
+# Monkeypatch st.plotly_chart ONCE (avoid wrapper stacking across reruns)
+if not getattr(st.plotly_chart, "__ai_capture__", False):
     _ORIG_PLOTLY_CHART = st.plotly_chart
-except Exception:
-    _ORIG_PLOTLY_CHART = None
 
-def _plotly_chart_capture(fig, *args, **kwargs):
-    try:
-        st.session_state["_ai_figs"].append(fig)
-    except Exception:
-        pass
-    if _ORIG_PLOTLY_CHART is None:
-        return None
-    return _ORIG_PLOTLY_CHART(fig, *args, **kwargs)
+    def _plotly_chart_capture(fig, *args, **kwargs):
+        try:
+            st.session_state["_ai_figs"].append(fig)
+        except Exception:
+            pass
+        return _ORIG_PLOTLY_CHART(fig, *args, **kwargs)
 
-# Monkeypatch so existing st.plotly_chart calls automatically register
-if _ORIG_PLOTLY_CHART is not None:
+    _plotly_chart_capture.__ai_capture__ = True
     st.plotly_chart = _plotly_chart_capture
 
 
@@ -6521,6 +6517,16 @@ if page == 'All Data':
 st.markdown("---")
 with st.expander("🤖 Ask AI about the chart on this page (Groq)", expanded=False):
     figs = st.session_state.get("_ai_figs", []) or []
+    # De-dupe within this run (defensive; should usually be unnecessary)
+    _seen_ids = set()
+    _uniq = []
+    for _f in figs:
+        _fid = id(_f)
+        if _fid in _seen_ids:
+            continue
+        _seen_ids.add(_fid)
+        _uniq.append(_f)
+    figs = _uniq
     if not figs:
         st.info("No Plotly charts detected on this page yet. Navigate to a page with charts to enable AI Q&A.")
     else:
