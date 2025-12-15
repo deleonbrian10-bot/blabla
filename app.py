@@ -592,6 +592,26 @@ uploaded = st.sidebar.file_uploader(
     help="If you upload here, it overrides searching for Combined_Sales_2025.csv in the folder.",
 )
 
+# -----------------------------
+# Navigation (render only selected page for speed)
+# -----------------------------
+_main_pages = [
+    "Overview",
+    "Price Drivers",
+    "Product Mix",
+    "Customer Segments",
+    "Geography & Channels",
+    "Inventory Timing",
+    "Ownership",
+    "Seasonality",
+    "Compliance",
+    "Stats",
+    "All Data",
+]
+page = st.sidebar.radio("Navigate", _main_pages, index=0, key="nav_main")
+st.sidebar.markdown("---")
+
+
 df = load_data(uploaded_file=uploaded)
 
 min_date = df["Date"].min()
@@ -600,13 +620,14 @@ if pd.isna(min_date) or pd.isna(max_date):
     st.error("❌ 'Date' column has no valid dates.")
     st.stop()
 
-date_range = st.sidebar.date_input(
+date_range = st.sidebar.slider(
     "Sale Date range",
-    value=(min_date.date(), max_date.date()),
     min_value=min_date.date(),
     max_value=max_date.date(),
+    value=(min_date.date(), max_date.date()),
     key="date_range",
 )
+
 
 # Core filters
 country_options = sorted(df["Country"].dropna().unique())
@@ -771,29 +792,7 @@ st.caption(
 )
 st.markdown("---")
 
-# -----------------------------
-# MAIN TOPIC NAVIGATION (single-page render for speed)
-# -----------------------------
-_main_pages = [
-    "Overview",
-    "Price Drivers",
-    "Product Mix",
-    "Customer Segments",
-    "Geography & Channels",
-    "Inventory Timing",
-    "Ownership",
-    "Seasonality",
-    "Compliance",
-    "Stats",
-    "All Data",
-]
-
-# Render ONLY the selected page (major performance boost on reruns)
-page = st.sidebar.radio("Navigate", _main_pages, index=0, key="nav_main")
-st.markdown("---")
-
-
-# -----------------------------
+# ----------------------------------------------------
 # TAB: Overview (more advanced)
 # -----------------------------
 if page == 'Overview':
