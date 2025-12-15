@@ -8,7 +8,6 @@ import io
 import math
 import pandas as pd
 import numpy as np
-import requests
 from pathlib import Path
 import streamlit as st
 import plotly.express as px
@@ -17,7 +16,6 @@ import plotly.io as pio
 from itertools import count
 import matplotlib.pyplot as plt
 from plotly.subplots import make_subplots
-from groq import Groq
 
 # =========================================================
 # Help Modal (Fragile Months)
@@ -160,115 +158,16 @@ def wkey(prefix="w"):
     return f"{prefix}_{next(_widget_counter)}"
 
 
-
 # -----------------------------
-# Groq AI helpers (page-wide, chart-aware)
+# Groq AI helpers (OpenAI-compatible REST; no extra deps)
 # -----------------------------
-def _ai_safe_str(x):
-    try:
-        if pd.isna(x):
-            return ""
-    except Exception:
-        pass
-    s = str(x)
-    return s if len(s) <= 200 else s[:200] + "…"
+def _groq_chat_completion(api_key: str, prompt: str, model: str = "llama-3.3-70b-versatile",
+                          max_completion_tokens: int = 350, temperature: float = 0.3) -> str:
+    """
+    Calls Groq's OpenAI-compatible chat completions endpoint via requests.
+    """
+    import requests
 
-def _ai_fig_title(fig, fallback="Chart"):
-    try:
-        t = getattr(getattr(fig, "layout", None), "title", None)
-        if t and getattr(t, "text", None):
-            title = str(t.text).strip()
-            if title:
-                return title
-    except Exception:
-        pass
-    return fallback
-
-def _ai_describe_fig(fig):
-    # Best-effort description from figure metadata (no need to hand-write per chart)
-    parts = []
-    try:
-        title = _ai_fig_title(fig, fallback="")
-        if title:
-            parts.append(f"Title: {title}")
-    except Exception:
-        pass
-
-    try:
-        lx = getattr(getattr(fig, "layout", None), "xaxis", None)
-        ly = getattr(getattr(fig, "layout", None), "yaxis", None)
-        xt = getattr(getattr(lx, "title", None), "text", None)
-        yt = getattr(getattr(ly, "title", None), "text", None)
-        if xt: parts.append(f"X-axis: {xt}")
-        if yt: parts.append(f"Y-axis: {yt}")
-    except Exception:
-        pass
-
-    try:
-        trace_types = sorted({getattr(tr, "type", "trace") for tr in getattr(fig, "data", [])})
-        if trace_types:
-            parts.append("Trace types: " + ", ".join(trace_types))
-        names = []
-        for tr in getattr(fig, "data", []):
-            nm = getattr(tr, "name", None)
-            if nm and str(nm).strip():
-                names.append(str(nm).strip())
-        names = list(dict.fromkeys(names))[:10]
-        if names:
-            parts.append("Series (sample): " + ", ".join(names))
-    except Exception:
-        pass
-
-    return "\n".join(parts) if parts else "Plotly chart."
-
-def _ai_df_from_fig(fig, max_points=900):
-    # Convert plotted points into a compact table so AI answers match what's on-screen.
-    rows = []
-    try:
-        data = getattr(fig, "data", []) or []
-        for tr in data:
-            ttype = getattr(tr, "type", "")
-            name = getattr(tr, "name", None)
-            series = str(name).strip() if name else (ttype or "series")
-
-            # Pie charts
-            if ttype == "pie" and getattr(tr, "labels", None) is not None and getattr(tr, "values", None) is not None:
-                labels = list(tr.labels)
-                values = list(tr.values)
-                for lab, val in zip(labels, values):
-                    rows.append({"series": series, "label": _ai_safe_str(lab), "value": val})
-                    if len(rows) >= max_points:
-                        break
-
-            # XY charts (scatter/line/bar, etc.)
-            elif getattr(tr, "x", None) is not None and getattr(tr, "y", None) is not None:
-                xs = list(tr.x)
-                ys = list(tr.y)
-                n = min(len(xs), len(ys))
-                for i in range(n):
-                    rows.append({"series": series, "x": _ai_safe_str(xs[i]), "y": ys[i]})
-                    if len(rows) >= max_points:
-                        break
-
-            if len(rows) >= max_points:
-                break
-    except Exception:
-        rows = []
-
-    if not rows:
-        return pd.DataFrame()
-
-    dfp = pd.DataFrame(rows)
-
-    # If still too large, thin deterministically (keeps shape/trends better than random sample)
-    if len(dfp) > max_points:
-        step = max(1, len(dfp) // max_points)
-        dfp = dfp.iloc[::step].head(max_points).reset_index(drop=True)
-
-    return dfp
-
-def groq_chat_completion(api_key: str, prompt: str, model: str = "llama-3.3-70b-versatile",
-                         max_tokens: int = 300, temperature: float = 0.3) -> str:
     url = "https://api.groq.com/openai/v1/chat/completions"
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     payload = {
@@ -277,124 +176,114 @@ def groq_chat_completion(api_key: str, prompt: str, model: str = "llama-3.3-70b-
             {"role": "system", "content": "You are a careful, concise data analyst."},
             {"role": "user", "content": prompt},
         ],
-        "max_tokens": int(max_tokens),
+        "max_completion_tokens": int(max_completion_tokens),
         "temperature": float(temperature),
     }
-    r = requests.post(url, headers=headers, json=payload, timeout=45)
+    r = requests.post(url, headers=headers, json=payload, timeout=60)
     r.raise_for_status()
-    j = r.json()
-    return j["choices"][0]["message"]["content"]
+    data = r.json()
+    return data["choices"][0]["message"]["content"]
 
-def render_groq_ai_panel(filtered_df=None):
-    # Show once per page, uses any charts rendered so far (captured via plotly_chart wrapper).
-    with st.expander("Ask AI about this page (Groq)", expanded=False):
-        st.caption("Pick a chart from this page (auto-detected), ask a question, and get a concise insight based on the plotted values.")
 
-        contexts = st.session_state.get("ai_contexts", []) or []
-        chart_titles = [c.get("title", f"Chart {i+1}") for i, c in enumerate(contexts)]
+def _figure_title(fig) -> str:
+    try:
+        t = fig.layout.title.text
+        if t:
+            return str(t)
+    except Exception:
+        pass
+    return "Untitled chart"
 
-        choices = []
-        if chart_titles:
-            choices += chart_titles
-        if filtered_df is not None and isinstance(filtered_df, pd.DataFrame) and not filtered_df.empty:
-            choices += ["(Filtered data sample — not a specific chart)"]
 
-        if not choices:
-            st.info("No charts detected yet on this page.")
-            return
+def _fig_to_compact_csv(fig, max_rows: int = 1200) -> str:
+    """
+    Builds a compact CSV from what is actually plotted (trace-level x/y),
+    so the AI answers are grounded in the on-screen chart.
+    """
+    import pandas as pd
 
-        default_index = 0
-        if chart_titles:
-            default_index = len(chart_titles) - 1  # default to most recently rendered chart
+    rows = []
+    try:
+        traces = list(fig.data) if hasattr(fig, "data") else []
+    except Exception:
+        traces = []
 
-        picked = st.selectbox("Chart / scope", options=choices, index=default_index, key="groq_scope")
+    for tr in traces:
+        name = getattr(tr, "name", None) or getattr(tr, "legendgroup", None) or getattr(tr, "type", "trace")
+        ttype = getattr(tr, "type", None)
 
-        user_q = st.text_area(
-            "Your question",
-            key="groq_question",
-            placeholder="e.g. What is the main trend? Any spikes or outliers? What differs most between groups?"
-        )
+        # Pie-like traces
+        labels = getattr(tr, "labels", None)
+        values = getattr(tr, "values", None)
+        if labels is not None and values is not None:
+            for lab, val in zip(list(labels)[:], list(values)[:]):
+                rows.append({"trace": name, "series": str(ttype), "label": lab, "value": val})
+                if len(rows) >= max_rows:
+                    break
+            if len(rows) >= max_rows:
+                break
+            continue
 
-        groq_api_key = st.session_state.get("groq_api_key", "") or ""
-        ask = st.button("Ask Groq", key="ask_groq_btn")
+        # Standard x/y traces
+        x = getattr(tr, "x", None)
+        y = getattr(tr, "y", None)
 
-        if not ask:
-            return
+        # Histogram sometimes has x only; keep x as value
+        if x is not None and y is None:
+            for xi in list(x)[:]:
+                rows.append({"trace": name, "series": str(ttype), "x": xi})
+                if len(rows) >= max_rows:
+                    break
+            if len(rows) >= max_rows:
+                break
+            continue
 
-        if not user_q.strip():
-            st.info("Please enter a question before asking the AI.")
-            return
-        if not groq_api_key.strip():
-            st.error("Please paste your Groq API key in the sidebar first.")
-            return
+        if x is None or y is None:
+            continue
 
-        # Build context CSV
-        context_desc = ""
-        context_csv = ""
-
-        if picked == "(Filtered data sample — not a specific chart)":
-            # Keep this small for token limits
-            cols = list(filtered_df.columns)[:20]
-            sample = filtered_df[cols].head(250).copy()
-            context_desc = "Scope: Sample of the filtered dataset currently driving the dashboard."
-            context_csv = sample.to_csv(index=False)
-        else:
-            # Find picked chart context
-            idx = chart_titles.index(picked) if picked in chart_titles else -1
-            if idx >= 0:
-                context_desc = contexts[idx].get("desc", "Chart context unavailable.")
-                context_csv = contexts[idx].get("csv", "")
-
-        prompt = f"""
-You are a data analyst interpreting a chart in an ammolite sales dashboard.
-
-CHART CONTEXT:
-{context_desc}
-
-DATA USED FOR THIS CHART (CSV excerpt of plotted points or filtered data):
-{context_csv}
-
-USER QUESTION:
-{user_q.strip()}
-
-INSTRUCTIONS:
-- Base your answer ONLY on the CSV data above.
-- Start with 1–2 sentences that directly answer the user's question.
-- If helpful, add up to 5 short bullet points highlighting key patterns.
-- Keep the answer under ~180 words unless the question clearly needs more nuance.
-- Do NOT talk about APIs/models; focus on the data and the question.
-"""
-
+        # Safely iterate
         try:
-            with st.spinner("Asking Groq…"):
-                answer = groq_chat_completion(groq_api_key.strip(), prompt)
-            st.markdown("**AI Insight (Groq):**")
-            st.write(answer)
-        except Exception as e:
-            st.error(f"Error calling Groq API: {e}")
-
-# Wrap st.plotly_chart to automatically capture contexts for the Groq panel (no per-chart edits needed)
-if not getattr(st.plotly_chart, "_ai_wrapped", False):
-    _orig_plotly_chart = st.plotly_chart
-
-    def _plotly_chart_ai(fig, *args, **kwargs):
-        try:
-            if "ai_contexts" not in st.session_state:
-                st.session_state["ai_contexts"] = []
-            # Only capture Plotly figures
-            if fig is not None and hasattr(fig, "data") and hasattr(fig, "layout"):
-                title = _ai_fig_title(fig, fallback=f"Chart {len(st.session_state['ai_contexts']) + 1}")
-                desc = _ai_describe_fig(fig)
-                dfp = _ai_df_from_fig(fig, max_points=900)
-                csv = dfp.to_csv(index=False) if not dfp.empty else ""
-                st.session_state["ai_contexts"].append({"title": title, "desc": desc, "csv": csv})
+            xs = list(x)
+            ys = list(y)
         except Exception:
-            # Never break rendering
-            pass
-        return _orig_plotly_chart(fig, *args, **kwargs)
+            continue
 
-    _plotly_chart_ai._ai_wrapped = True
-    st.plotly_chart = _plotly_chart_ai
+        n = min(len(xs), len(ys))
+        for i in range(n):
+            rows.append({"trace": name, "series": str(ttype), "x": xs[i], "y": ys[i]})
+            if len(rows) >= max_rows:
+                break
+        if len(rows) >= max_rows:
+            break
+
+    if not rows:
+        return "trace,series\n(no plottable trace data)\n"
+
+    dfc = pd.DataFrame(rows)
+    return dfc.to_csv(index=False)
+
+
+# --- Capture charts rendered on the current page ---
+if "_ai_figs" not in st.session_state:
+    st.session_state["_ai_figs"] = []
+
+try:
+    _ORIG_PLOTLY_CHART = st.plotly_chart
+except Exception:
+    _ORIG_PLOTLY_CHART = None
+
+def _plotly_chart_capture(fig, *args, **kwargs):
+    try:
+        st.session_state["_ai_figs"].append(fig)
+    except Exception:
+        pass
+    if _ORIG_PLOTLY_CHART is None:
+        return None
+    return _ORIG_PLOTLY_CHART(fig, *args, **kwargs)
+
+# Monkeypatch so existing st.plotly_chart calls automatically register
+if _ORIG_PLOTLY_CHART is not None:
+    st.plotly_chart = _plotly_chart_capture
 
 
 
@@ -832,18 +721,14 @@ uploaded = st.sidebar.file_uploader(
     help="If you upload here, it overrides searching for Combined_Sales_2025.csv in the folder.",
 )
 
-
-# Groq API key (stored in session state)
-if "groq_api_key" not in st.session_state:
-    st.session_state["groq_api_key"] = ""
-
-st.session_state["groq_api_key"] = st.sidebar.text_input(
+# -----------------------------
+# Groq API Key (for AI Q&A)
+# -----------------------------
+groq_api_key = st.sidebar.text_input(
     "Groq API key",
     type="password",
-    value=st.session_state.get("groq_api_key", ""),
-    placeholder="gsk_...",
-    key="groq_api_key_input",
-    help="Paste your Groq key here. It stays local to this session.",
+    key="groq_api_key",
+    help="Paste your Groq API key here to enable the AI Q&A panel.",
 )
 
 # -----------------------------
@@ -863,10 +748,7 @@ _main_pages = [
     "All Data",
 ]
 page = st.sidebar.radio("Navigate", _main_pages, index=0, key="nav_main")
-
-# Reset chart contexts each rerun so the AI panel reflects only the current page
-st.session_state["ai_contexts"] = []
-
+st.session_state["_ai_figs"] = []  # reset captured charts each rerun
 st.sidebar.markdown("---")
 
 
@@ -4778,331 +4660,331 @@ if page == 'Seasonality':
         ]
     )
 
-    # =========================================================
-    # SUBTAB 1 — Seasonal Price Sensitivity (DUAL-SCOPE LINES)
-    # Bubbles/Flags = filtered by Product Type
-    # Revenue + Volume lines = ALWAYS ALL SALES (do NOT change with Product Type filter)
-    # X = MonthStart (Month-Year) | Y = Revenue
-    # Bubble Size = Avg Price | Color = Grade
-    # Flags (high-confidence) per Grade vs rolling 3-period baseline:
-    #   Avg Price >= +5% AND Revenue <= -10% AND Volume <= -10%
-    # Bubble hover shows Flag Type + Flag Reason ONLY when flagged
-    # =========================================================
-    with s1:
-        # -----------------------------
-        # Title + Help button (same row)
-        # -----------------------------
-        t1, t2 = st.columns([0.85, 0.15], vertical_alignment="center")
-        with t1:
-            st.subheader("Seasonal Price Sensitivity & Revenue Impact")
-        with t2:
-            if st.button("❓ Help", key=pkey("seasonality_help_btn")):
-                show_seasonality_help()
+   # =========================================================
+# SUBTAB 1 — Seasonal Price Sensitivity (DUAL-SCOPE LINES)
+# Bubbles/Flags = filtered by Product Type
+# Revenue + Volume lines = ALWAYS ALL SALES (do NOT change with Product Type filter)
+# X = MonthStart (Month-Year) | Y = Revenue
+# Bubble Size = Avg Price | Color = Grade
+# Flags (high-confidence) per Grade vs rolling 3-period baseline:
+#   Avg Price >= +5% AND Revenue <= -10% AND Volume <= -10%
+# Bubble hover shows Flag Type + Flag Reason ONLY when flagged
+# =========================================================
+with s1:
+    # -----------------------------
+    # Title + Help button (same row)
+    # -----------------------------
+    t1, t2 = st.columns([0.85, 0.15], vertical_alignment="center")
+    with t1:
+        st.subheader("Seasonal Price Sensitivity & Revenue Impact")
+    with t2:
+        if st.button("❓ Help", key=pkey("seasonality_help_btn")):
+            show_seasonality_help()
 
-        # -----------------------------
-        # Validation
-        # -----------------------------
-        if "Product Type" not in t_df.columns or "Grade" not in t_df.columns:
-            st.info("Need both 'Product Type' and 'Grade' columns to build this view.")
-        elif "Month" not in t_df.columns:
-            st.info("Need 'Month' column for Month-Year seasonality view.")
+    # -----------------------------
+    # Validation
+    # -----------------------------
+    if "Product Type" not in t_df.columns or "Grade" not in t_df.columns:
+        st.info("Need both 'Product Type' and 'Grade' columns to build this view.")
+    elif "Month" not in t_df.columns:
+        st.info("Need 'Month' column for Month-Year seasonality view.")
+    else:
+        df_el = t_df.dropna(subset=["Month", "Product Type", "Grade", price_col, revenue_col]).copy()
+
+        if df_el.empty:
+            st.info("Not enough Month + Product Type + Grade + Price + Revenue data.")
         else:
-            df_el = t_df.dropna(subset=["Month", "Product Type", "Grade", price_col, revenue_col]).copy()
+            # -----------------------------
+            # Normalize Month
+            # -----------------------------
+            df_el["MonthStart"] = (
+                pd.to_datetime(df_el["Month"], errors="coerce")
+                .dt.to_period("M")
+                .dt.to_timestamp()
+            )
+            df_el = df_el.dropna(subset=["MonthStart"])
+            df_el["MonthLabel"] = df_el["MonthStart"].dt.strftime("%b %Y")
 
-            if df_el.empty:
-                st.info("Not enough Month + Product Type + Grade + Price + Revenue data.")
+            # ✅ df_all is ALWAYS all sales (used for revenue/volume lines)
+            df_all = df_el.copy()
+
+            # -----------------------------
+            # Product Type Filter (bubbles + flags only)
+            # -----------------------------
+            pt_list = sorted(df_el["Product Type"].astype(str).unique().tolist())
+            pt_choice = st.selectbox(
+                "Filter by Product Type (bubbles + flags only)",
+                options=["All"] + pt_list,
+                index=0,
+                key=pkey("seasonality_pt_filter"),
+            )
+
+            df_view = df_el if pt_choice == "All" else df_el[df_el["Product Type"].astype(str) == pt_choice]
+
+            if df_view.empty:
+                st.info("No data for the selected Product Type.")
             else:
                 # -----------------------------
-                # Normalize Month
+                # Aggregate Month x Grade (FILTERED)
                 # -----------------------------
-                df_el["MonthStart"] = (
-                    pd.to_datetime(df_el["Month"], errors="coerce")
-                    .dt.to_period("M")
-                    .dt.to_timestamp()
-                )
-                df_el = df_el.dropna(subset=["MonthStart"])
-                df_el["MonthLabel"] = df_el["MonthStart"].dt.strftime("%b %Y")
-
-                # ✅ df_all is ALWAYS all sales (used for revenue/volume lines)
-                df_all = df_el.copy()
-
-                # -----------------------------
-                # Product Type Filter (bubbles + flags only)
-                # -----------------------------
-                pt_list = sorted(df_el["Product Type"].astype(str).unique().tolist())
-                pt_choice = st.selectbox(
-                    "Filter by Product Type (bubbles + flags only)",
-                    options=["All"] + pt_list,
-                    index=0,
-                    key=pkey("seasonality_pt_filter"),
+                base = (
+                    df_view.groupby(["MonthStart", "Grade"], as_index=False)
+                    .agg(
+                        Avg_Price=(price_col, "mean"),
+                        Revenue=(revenue_col, "sum"),
+                        Volume=(revenue_col, "size"),  # txn count as proxy volume
+                    )
+                    .sort_values("MonthStart")
                 )
 
-                df_view = df_el if pt_choice == "All" else df_el[df_el["Product Type"].astype(str) == pt_choice]
-
-                if df_view.empty:
-                    st.info("No data for the selected Product Type.")
+                if base.empty:
+                    st.info("No data after grouping.")
                 else:
+                    base["Grade"] = base["Grade"].astype(str)
+                    base["MonthLabel"] = base["MonthStart"].dt.strftime("%b %Y")
+
+                    # Optional grade ordering (AAA/AA/A/B)
+                    grade_order = ["AAA", "AA", "A", "B","Collectibles"]
+                    present = [g for g in grade_order if g in base["Grade"].unique()]
+                    if present:
+                        base["Grade"] = pd.Categorical(base["Grade"], categories=present, ordered=True)
+                    base["GradeStr"] = base["Grade"].astype(str)
+
                     # -----------------------------
-                    # Aggregate Month x Grade (FILTERED)
+                    # HIGH-CONFIDENCE FLAGS (FILTERED, per Grade) vs rolling 3-period baseline
                     # -----------------------------
-                    base = (
-                        df_view.groupby(["MonthStart", "Grade"], as_index=False)
-                        .agg(
-                            Avg_Price=(price_col, "mean"),
-                            Revenue=(revenue_col, "sum"),
-                            Volume=(revenue_col, "size"),  # txn count as proxy volume
-                        )
-                        .sort_values("MonthStart")
+                    base_sorted = base.sort_values(["GradeStr", "MonthStart"]).copy()
+
+                    base_sorted["Roll_Avg_Price"] = (
+                        base_sorted.groupby("GradeStr")["Avg_Price"]
+                        .transform(lambda x: x.rolling(3, min_periods=2).mean())
+                    )
+                    base_sorted["Roll_Revenue"] = (
+                        base_sorted.groupby("GradeStr")["Revenue"]
+                        .transform(lambda x: x.rolling(3, min_periods=2).mean())
+                    )
+                    base_sorted["Roll_Volume"] = (
+                        base_sorted.groupby("GradeStr")["Volume"]
+                        .transform(lambda x: x.rolling(3, min_periods=2).mean())
                     )
 
-                    if base.empty:
-                        st.info("No data after grouping.")
+                    base_sorted["Price_vs_Roll_%"] = np.where(
+                        base_sorted["Roll_Avg_Price"] > 0,
+                        (base_sorted["Avg_Price"] - base_sorted["Roll_Avg_Price"]) / base_sorted["Roll_Avg_Price"],
+                        np.nan,
+                    )
+                    base_sorted["Revenue_vs_Roll_%"] = np.where(
+                        base_sorted["Roll_Revenue"] > 0,
+                        (base_sorted["Revenue"] - base_sorted["Roll_Revenue"]) / base_sorted["Roll_Revenue"],
+                        np.nan,
+                    )
+                    base_sorted["Volume_vs_Roll_%"] = np.where(
+                        base_sorted["Roll_Volume"] > 0,
+                        (base_sorted["Volume"] - base_sorted["Roll_Volume"]) / base_sorted["Roll_Volume"],
+                        np.nan,
+                    )
+
+                    base_sorted["Flag_PriceResistance"] = (
+                        (base_sorted["Price_vs_Roll_%"] >= 0.05) &
+                        (base_sorted["Revenue_vs_Roll_%"] <= -0.10) &
+                        (base_sorted["Volume_vs_Roll_%"] <= -0.10)
+                    )
+
+                    base_sorted["Flag Reason"] = ""
+                    m = base_sorted["Flag_PriceResistance"]
+                    base_sorted.loc[m, "Flag Reason"] = (
+                        "Avg Price ↑ "
+                        + (base_sorted.loc[m, "Price_vs_Roll_%"] * 100).round(1).astype(str)
+                        + "%, Revenue ↓ "
+                        + (base_sorted.loc[m, "Revenue_vs_Roll_%"] * 100).round(1).astype(str)
+                        + "%, Volume ↓ "
+                        + (base_sorted.loc[m, "Volume_vs_Roll_%"] * 100).round(1).astype(str)
+                        + "% vs 3-period average (same grade)"
+                    )
+
+                    flags = base_sorted[base_sorted["Flag_PriceResistance"]].copy()
+                    flags["Trigger"] = "Price Resistance (High Confidence)"
+                    if not flags.empty:
+                        flags["MonthLabel"] = flags["MonthStart"].dt.strftime("%b %Y")
+
+                    # -----------------------------
+                    # Flag summary
+                    # -----------------------------
+                    if flags.empty:
+                        st.success("No high-confidence pricing resistance detected for the selected filter.")
                     else:
-                        base["Grade"] = base["Grade"].astype(str)
-                        base["MonthLabel"] = base["MonthStart"].dt.strftime("%b %Y")
+                        st.warning("High-confidence pricing resistance detected — review ⚠ markers and hover for details.")
 
-                        # Optional grade ordering (AAA/AA/A/B)
-                        grade_order = ["AAA", "AA", "A", "B","Collectibles"]
-                        present = [g for g in grade_order if g in base["Grade"].unique()]
-                        if present:
-                            base["Grade"] = pd.Categorical(base["Grade"], categories=present, ordered=True)
-                        base["GradeStr"] = base["Grade"].astype(str)
+                    # -----------------------------
+                    # Add flag info into base (for bubble hover)
+                    # -----------------------------
+                    base["Flag Type"] = ""
+                    base["Flag Reason"] = ""
+                    if not flags.empty:
+                        trig_map = flags.set_index(["MonthStart", "GradeStr"])["Trigger"].to_dict()
+                        reas_map = flags.set_index(["MonthStart", "GradeStr"])["Flag Reason"].to_dict()
 
-                        # -----------------------------
-                        # HIGH-CONFIDENCE FLAGS (FILTERED, per Grade) vs rolling 3-period baseline
-                        # -----------------------------
-                        base_sorted = base.sort_values(["GradeStr", "MonthStart"]).copy()
-
-                        base_sorted["Roll_Avg_Price"] = (
-                            base_sorted.groupby("GradeStr")["Avg_Price"]
-                            .transform(lambda x: x.rolling(3, min_periods=2).mean())
+                        base["Flag Type"] = base.apply(
+                            lambda r: trig_map.get((r["MonthStart"], str(r["GradeStr"])), ""),
+                            axis=1,
                         )
-                        base_sorted["Roll_Revenue"] = (
-                            base_sorted.groupby("GradeStr")["Revenue"]
-                            .transform(lambda x: x.rolling(3, min_periods=2).mean())
-                        )
-                        base_sorted["Roll_Volume"] = (
-                            base_sorted.groupby("GradeStr")["Volume"]
-                            .transform(lambda x: x.rolling(3, min_periods=2).mean())
+                        base["Flag Reason"] = base.apply(
+                            lambda r: reas_map.get((r["MonthStart"], str(r["GradeStr"])), ""),
+                            axis=1,
                         )
 
-                        base_sorted["Price_vs_Roll_%"] = np.where(
-                            base_sorted["Roll_Avg_Price"] > 0,
-                            (base_sorted["Avg_Price"] - base_sorted["Roll_Avg_Price"]) / base_sorted["Roll_Avg_Price"],
-                            np.nan,
-                        )
-                        base_sorted["Revenue_vs_Roll_%"] = np.where(
-                            base_sorted["Roll_Revenue"] > 0,
-                            (base_sorted["Revenue"] - base_sorted["Roll_Revenue"]) / base_sorted["Roll_Revenue"],
-                            np.nan,
-                        )
-                        base_sorted["Volume_vs_Roll_%"] = np.where(
-                            base_sorted["Roll_Volume"] > 0,
-                            (base_sorted["Volume"] - base_sorted["Roll_Volume"]) / base_sorted["Roll_Volume"],
-                            np.nan,
-                        )
+                    # -----------------------------
+                    # Bubble chart (FILTERED)
+                    # -----------------------------
+                    fig = px.scatter(
+                        base,
+                        x="MonthStart",
+                        y="Revenue",
+                        color="GradeStr",
+                        size="Avg_Price",
+                        size_max=55,
+                        title="",
+                    )
 
-                        base_sorted["Flag_PriceResistance"] = (
-                            (base_sorted["Price_vs_Roll_%"] >= 0.05) &
-                            (base_sorted["Revenue_vs_Roll_%"] <= -0.10) &
-                            (base_sorted["Volume_vs_Roll_%"] <= -0.10)
-                        )
+                    # -----------------------------
+                    # ✅ Total Revenue line (ALL SALES)
+                    # -----------------------------
+                    rev_line_all = (
+                        df_all.groupby("MonthStart", as_index=False)[revenue_col]
+                        .sum()
+                        .sort_values("MonthStart")
+                    )
+                    fig.add_scatter(
+                        x=rev_line_all["MonthStart"],
+                        y=rev_line_all[revenue_col],
+                        mode="lines+markers",
+                        name="Total Revenue (All Products)",
+                        line=dict(width=3),
+                        hovertemplate="<b>%{x|%b %Y}</b><br>Total Revenue: $%{y:,.0f}<extra></extra>",
+                    )
 
-                        base_sorted["Flag Reason"] = ""
-                        m = base_sorted["Flag_PriceResistance"]
-                        base_sorted.loc[m, "Flag Reason"] = (
-                            "Avg Price ↑ "
-                            + (base_sorted.loc[m, "Price_vs_Roll_%"] * 100).round(1).astype(str)
-                            + "%, Revenue ↓ "
-                            + (base_sorted.loc[m, "Revenue_vs_Roll_%"] * 100).round(1).astype(str)
-                            + "%, Volume ↓ "
-                            + (base_sorted.loc[m, "Volume_vs_Roll_%"] * 100).round(1).astype(str)
-                            + "% vs 3-period average (same grade)"
-                        )
+                    # -----------------------------
+                    # ✅ Total Volume line (ALL SALES) — secondary axis
+                    # -----------------------------
+                    vol_line_all = (
+                        df_all.groupby("MonthStart", as_index=False)
+                        .size()
+                        .rename(columns={"size": "Volume"})
+                        .sort_values("MonthStart")
+                    )
+                    fig.add_scatter(
+                        x=vol_line_all["MonthStart"],
+                        y=vol_line_all["Volume"],
+                        mode="lines+markers",
+                        name="Total Volume (All Products)",
+                        line=dict(width=2, dash="dot"),
+                        yaxis="y2",
+                        hovertemplate="<b>%{x|%b %Y}</b><br>Total Volume: %{y:,.0f} txns<extra></extra>",
+                    )
 
-                        flags = base_sorted[base_sorted["Flag_PriceResistance"]].copy()
-                        flags["Trigger"] = "Price Resistance (High Confidence)"
-                        if not flags.empty:
-                            flags["MonthLabel"] = flags["MonthStart"].dt.strftime("%b %Y")
-
-                        # -----------------------------
-                        # Flag summary
-                        # -----------------------------
-                        if flags.empty:
-                            st.success("No high-confidence pricing resistance detected for the selected filter.")
-                        else:
-                            st.warning("High-confidence pricing resistance detected — review ⚠ markers and hover for details.")
-
-                        # -----------------------------
-                        # Add flag info into base (for bubble hover)
-                        # -----------------------------
-                        base["Flag Type"] = ""
-                        base["Flag Reason"] = ""
-                        if not flags.empty:
-                            trig_map = flags.set_index(["MonthStart", "GradeStr"])["Trigger"].to_dict()
-                            reas_map = flags.set_index(["MonthStart", "GradeStr"])["Flag Reason"].to_dict()
-
-                            base["Flag Type"] = base.apply(
-                                lambda r: trig_map.get((r["MonthStart"], str(r["GradeStr"])), ""),
-                                axis=1,
-                            )
-                            base["Flag Reason"] = base.apply(
-                                lambda r: reas_map.get((r["MonthStart"], str(r["GradeStr"])), ""),
-                                axis=1,
-                            )
-
-                        # -----------------------------
-                        # Bubble chart (FILTERED)
-                        # -----------------------------
-                        fig = px.scatter(
-                            base,
-                            x="MonthStart",
-                            y="Revenue",
-                            color="GradeStr",
-                            size="Avg_Price",
-                            size_max=55,
-                            title="",
-                        )
-
-                        # -----------------------------
-                        # ✅ Total Revenue line (ALL SALES)
-                        # -----------------------------
-                        rev_line_all = (
-                            df_all.groupby("MonthStart", as_index=False)[revenue_col]
-                            .sum()
-                            .sort_values("MonthStart")
-                        )
+                    # -----------------------------
+                    # Flag markers (FILTERED) — hover shows ONLY flag type + reason
+                    # -----------------------------
+                    if not flags.empty:
                         fig.add_scatter(
-                            x=rev_line_all["MonthStart"],
-                            y=rev_line_all[revenue_col],
-                            mode="lines+markers",
-                            name="Total Revenue (All Products)",
-                            line=dict(width=3),
-                            hovertemplate="<b>%{x|%b %Y}</b><br>Total Revenue: $%{y:,.0f}<extra></extra>",
-                        )
-
-                        # -----------------------------
-                        # ✅ Total Volume line (ALL SALES) — secondary axis
-                        # -----------------------------
-                        vol_line_all = (
-                            df_all.groupby("MonthStart", as_index=False)
-                            .size()
-                            .rename(columns={"size": "Volume"})
-                            .sort_values("MonthStart")
-                        )
-                        fig.add_scatter(
-                            x=vol_line_all["MonthStart"],
-                            y=vol_line_all["Volume"],
-                            mode="lines+markers",
-                            name="Total Volume (All Products)",
-                            line=dict(width=2, dash="dot"),
-                            yaxis="y2",
-                            hovertemplate="<b>%{x|%b %Y}</b><br>Total Volume: %{y:,.0f} txns<extra></extra>",
-                        )
-
-                        # -----------------------------
-                        # Flag markers (FILTERED) — hover shows ONLY flag type + reason
-                        # -----------------------------
-                        if not flags.empty:
-                            fig.add_scatter(
-                                x=flags["MonthStart"],
-                                y=flags["Revenue"],
-                                mode="markers",
-                                name="⚠ Flagged",
-                                marker=dict(size=14, symbol="x"),
-                                customdata=np.column_stack([
-                                    flags["GradeStr"].astype(str),
-                                    flags["Flag Reason"].astype(str),
-                                    flags["Trigger"].astype(str),
-                                ]),
-                                hovertemplate=(
-                                    "<b>%{x|%b %Y}</b><br>"
-                                    "Grade: %{customdata[0]}<br>"
-                                    "<b>Flag Type:</b> %{customdata[2]}<br>"
-                                    "<b>Flag Reason:</b> %{customdata[1]}"
-                                    "<extra></extra>"
-                                ),
-                            )
-
-                        # -----------------------------
-                        # Layout formatting + y2 axis
-                        # -----------------------------
-                        fig.update_layout(
-                            xaxis_title="Month-Year",
-                            yaxis_title="Revenue (CAD)",
-                            legend_title_text="Grade",
-                            hovermode="closest",
-                            yaxis2=dict(
-                                title="Volume (Transactions)",
-                                overlaying="y",
-                                side="right",
-                                showgrid=False,
+                            x=flags["MonthStart"],
+                            y=flags["Revenue"],
+                            mode="markers",
+                            name="⚠ Flagged",
+                            marker=dict(size=14, symbol="x"),
+                            customdata=np.column_stack([
+                                flags["GradeStr"].astype(str),
+                                flags["Flag Reason"].astype(str),
+                                flags["Trigger"].astype(str),
+                            ]),
+                            hovertemplate=(
+                                "<b>%{x|%b %Y}</b><br>"
+                                "Grade: %{customdata[0]}<br>"
+                                "<b>Flag Type:</b> %{customdata[2]}<br>"
+                                "<b>Flag Reason:</b> %{customdata[1]}"
+                                "<extra></extra>"
                             ),
                         )
-                        fig.update_xaxes(type="date", tickformat="%b %Y", dtick="M1")
-                        fig.update_yaxes(tickprefix="$", separatethousands=True)
 
-                        # -----------------------------
-                        # style_fig (may reset hovertemplates)
-                        # -----------------------------
-                        fig = style_fig(fig, height=600)
+                    # -----------------------------
+                    # Layout formatting + y2 axis
+                    # -----------------------------
+                    fig.update_layout(
+                        xaxis_title="Month-Year",
+                        yaxis_title="Revenue (CAD)",
+                        legend_title_text="Grade",
+                        hovermode="closest",
+                        yaxis2=dict(
+                            title="Volume (Transactions)",
+                            overlaying="y",
+                            side="right",
+                            showgrid=False,
+                        ),
+                    )
+                    fig.update_xaxes(type="date", tickformat="%b %Y", dtick="M1")
+                    fig.update_yaxes(tickprefix="$", separatethousands=True)
 
-                        # -----------------------------
-                        # ✅ FORCE bubble hover AFTER style_fig
-                        # Show Flag Type + Flag Reason ONLY when flagged (blank otherwise)
-                        # -----------------------------
-                        base_plot = base.copy()
-                        base_plot["GradeStr"] = base_plot["GradeStr"].astype(str)
+                    # -----------------------------
+                    # style_fig (may reset hovertemplates)
+                    # -----------------------------
+                    fig = style_fig(fig, height=600)
 
-                        flag_type = base_plot["Flag Type"].astype(str).fillna("")
-                        flag_reason = base_plot["Flag Reason"].astype(str).fillna("")
+                    # -----------------------------
+                    # ✅ FORCE bubble hover AFTER style_fig
+                    # Show Flag Type + Flag Reason ONLY when flagged (blank otherwise)
+                    # -----------------------------
+                    base_plot = base.copy()
+                    base_plot["GradeStr"] = base_plot["GradeStr"].astype(str)
 
-                        flag_block_type = np.where(flag_type != "", "<b>Flag Type:</b> " + flag_type + "<br>", "")
-                        flag_block_reason = np.where(flag_reason != "", "<b>Flag Reason:</b> " + flag_reason, "")
+                    flag_type = base_plot["Flag Type"].astype(str).fillna("")
+                    flag_reason = base_plot["Flag Reason"].astype(str).fillna("")
 
-                        # customdata: [Volume, FlagTypeBlock, FlagReasonBlock, Avg_Price]
-                        base_cd = np.column_stack([
-                            base_plot["Volume"].astype(float),
-                            flag_block_type,
-                            flag_block_reason,
-                            base_plot["Avg_Price"].astype(float),
-                        ])
+                    flag_block_type = np.where(flag_type != "", "<b>Flag Type:</b> " + flag_type + "<br>", "")
+                    flag_block_reason = np.where(flag_reason != "", "<b>Flag Reason:</b> " + flag_reason, "")
 
-                        for tr in fig.data:
-                            # only bubble traces (exclude flagged X markers and the lines)
-                            if getattr(tr, "mode", "") == "markers" and tr.name not in ["⚠ Flagged"]:
-                                grade_name = str(tr.name)
-                                mask = (base_plot["GradeStr"] == grade_name)
+                    # customdata: [Volume, FlagTypeBlock, FlagReasonBlock, Avg_Price]
+                    base_cd = np.column_stack([
+                        base_plot["Volume"].astype(float),
+                        flag_block_type,
+                        flag_block_reason,
+                        base_plot["Avg_Price"].astype(float),
+                    ])
 
-                                tr.customdata = base_cd[mask.values]
-                                tr.hovertemplate = (
-                                    "<b>%{x|%b %Y}</b><br>"
-                                    f"Grade: {grade_name}<br>"
-                                    "Revenue: $%{y:,.0f}<br>"
-                                    "Avg Price: $%{customdata[3]:,.2f}<br>"
-                                    "Volume (txn): %{customdata[0]:,.0f}"
-                                    "<br><br>"
-                                    "%{customdata[1]}%{customdata[2]}"
-                                    "<extra></extra>"
-                                )
+                    for tr in fig.data:
+                        # only bubble traces (exclude flagged X markers and the lines)
+                        if getattr(tr, "mode", "") == "markers" and tr.name not in ["⚠ Flagged"]:
+                            grade_name = str(tr.name)
+                            mask = (base_plot["GradeStr"] == grade_name)
 
-                        # ✅ Re-apply line hovers AFTER style_fig (defensive)
-                        for tr in fig.data:
-                            if tr.name == "Total Revenue (All Products)":
-                                tr.hovertemplate = "<b>%{x|%b %Y}</b><br>Total Revenue: $%{y:,.0f}<extra></extra>"
-                            if tr.name == "Total Volume (All Products)":
-                                tr.hovertemplate = "<b>%{x|%b %Y}</b><br>Total Volume: %{y:,.0f} txns<extra></extra>"
+                            tr.customdata = base_cd[mask.values]
+                            tr.hovertemplate = (
+                                "<b>%{x|%b %Y}</b><br>"
+                                f"Grade: {grade_name}<br>"
+                                "Revenue: $%{y:,.0f}<br>"
+                                "Avg Price: $%{customdata[3]:,.2f}<br>"
+                                "Volume (txn): %{customdata[0]:,.0f}"
+                                "<br><br>"
+                                "%{customdata[1]}%{customdata[2]}"
+                                "<extra></extra>"
+                            )
 
-                        st.plotly_chart(
-                            fig,
-                            use_container_width=True,
-                            key=pkey("seasonality_tab1_dual_scope_lines"),
-                        )
+                    # ✅ Re-apply line hovers AFTER style_fig (defensive)
+                    for tr in fig.data:
+                        if tr.name == "Total Revenue (All Products)":
+                            tr.hovertemplate = "<b>%{x|%b %Y}</b><br>Total Revenue: $%{y:,.0f}<extra></extra>"
+                        if tr.name == "Total Volume (All Products)":
+                            tr.hovertemplate = "<b>%{x|%b %Y}</b><br>Total Volume: %{y:,.0f} txns<extra></extra>"
 
-        # =========================================================
-        # SUBTAB 2 — Fragile Periods (PERCENT + SEASONALITY + DROPDOWN MODE)
-        # (hover fixed to not truncate; re-applied after style_fig)
-        # =========================================================
+                    st.plotly_chart(
+                        fig,
+                        use_container_width=True,
+                        key=pkey("seasonality_tab1_dual_scope_lines"),
+                    )
+
+    # =========================================================
+    # SUBTAB 2 — Fragile Periods (PERCENT + SEASONALITY + DROPDOWN MODE)
+    # (hover fixed to not truncate; re-applied after style_fig)
+    # =========================================================
     with s2:
         h1, h2 = st.columns([0.85, 0.15], vertical_alignment="center")
         with h1:
@@ -6631,3 +6513,83 @@ if page == 'All Data':
         mime="text/csv",
         key="dl_all",
     )
+
+
+# -----------------------------
+# Groq AI Q&A Panel (Page-wide)
+# -----------------------------
+st.markdown("---")
+with st.expander("🤖 Ask AI about the chart on this page (Groq)", expanded=False):
+    figs = st.session_state.get("_ai_figs", []) or []
+    if not figs:
+        st.info("No Plotly charts detected on this page yet. Navigate to a page with charts to enable AI Q&A.")
+    else:
+        titles = []
+        for i, fig in enumerate(figs):
+            titles.append(f"{i+1}. {_figure_title(fig)}")
+
+        pick = st.selectbox("Pick a chart", options=list(range(len(figs))), format_func=lambda i: titles[i], key="groq_chart_pick")
+
+        user_q = st.text_area(
+            "Question for the AI",
+            key="groq_user_question",
+            placeholder="e.g. What trend stands out? Are there outliers or differences between categories?",
+        )
+
+        # Build compact CSV context from selected figure
+        sel_fig = figs[pick]
+        context_csv = _fig_to_compact_csv(sel_fig, max_rows=1200)
+
+        with st.expander("Show compact CSV sent to Groq", expanded=False):
+            lines = context_csv.splitlines()
+            preview_n = min(len(lines), 220)  # keep UI snappy
+            st.caption(f"Showing {preview_n:,} of {len(lines):,} lines (max rows capped when generated).")
+            st.code("\n".join(lines[:preview_n]), language="csv")
+            st.download_button(
+                "Download compact CSV",
+                data=context_csv.encode("utf-8"),
+                file_name="groq_chart_context.csv",
+                mime="text/csv",
+                key="dl_groq_context_csv",
+            )
+
+        if st.button("Ask Groq", key="btn_ask_groq"):
+            if not user_q.strip():
+                st.info("Please enter a question before asking the AI.")
+            elif not st.session_state.get("groq_api_key"):
+                st.error("Please paste your Groq API key in the sidebar first.")
+            else:
+                chart_desc = f"""
+CHART TITLE: {_figure_title(sel_fig)}
+"""
+                prompt = f"""
+You are a data analyst interpreting a chart from an ammolite sales dashboard.
+
+CHART CONTEXT:
+{chart_desc}
+
+DATA (COMPACT CSV) USED FOR THIS CHART:
+{context_csv}
+
+USER QUESTION:
+\"\"\"{user_q}\"\"\"
+
+INSTRUCTIONS:
+- Base your answer ONLY on the CSV data above.
+- Start with 1–2 sentences that directly answer the user's question.
+- Then add up to 5 short bullet points with key patterns (only if useful).
+- Keep it under ~180 words unless the question truly needs more nuance.
+- Do NOT mention models/APIs. Focus on what the chart data implies.
+"""
+                try:
+                    ans = _groq_chat_completion(
+                        api_key=st.session_state.get("groq_api_key"),
+                        prompt=prompt,
+                        model="llama-3.3-70b-versatile",
+                        max_completion_tokens=350,
+                        temperature=0.3,
+                    )
+                    st.markdown("**AI Insight (Groq):**")
+                    st.write(ans)
+                except Exception as e:
+                    st.error(f"Error calling Groq API: {e}")
