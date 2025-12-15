@@ -2604,7 +2604,7 @@ if page == 'Customer Segments':
         st.markdown("#### New vs Returning Customers Over Time")
 
         days_option = st.selectbox("Select time frame for new customers:",options=[30, 60, 90],index=2)
-       recent_threshold = pd.Timestamp.today() - pd.Timedelta(days=days_option)
+        recent_threshold = pd.Timestamp.today() - pd.Timedelta(days=days_option)
         df["CustomerID"] = df["Customer Name"].astype(str) + " | " + df["Country"].astype(str) + " | " + df["City"].astype(str)
         first_purchase = df.groupby("CustomerID")["Date"].min().reset_index()
         first_purchase.rename(columns={"Date": "FirstPurchase"}, inplace=True)
