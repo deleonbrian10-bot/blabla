@@ -277,9 +277,9 @@ def _figure_label(fig, idx: int, used=None) -> str:
 
 
 
-def _fig_to_compact_csv(fig, max_rows: int = 1200) -> str:
+def _fig_to_compact_df(fig, max_rows: int = 1200) -> "pd.DataFrame":
     """
-    Builds a compact CSV from what is actually plotted (trace-level x/y),
+    Builds a compact DataFrame from what is actually plotted (trace-level x/y),
     so the AI answers are grounded in the on-screen chart.
     """
     import pandas as pd
@@ -291,7 +291,11 @@ def _fig_to_compact_csv(fig, max_rows: int = 1200) -> str:
         traces = []
 
     for tr in traces:
-        name = getattr(tr, "name", None) or getattr(tr, "legendgroup", None) or getattr(tr, "type", "trace")
+        name = (
+            getattr(tr, "name", None)
+            or getattr(tr, "legendgroup", None)
+            or getattr(tr, "type", "trace")
+        )
         ttype = getattr(tr, "type", None)
 
         # Pie-like traces
@@ -299,7 +303,7 @@ def _fig_to_compact_csv(fig, max_rows: int = 1200) -> str:
         values = getattr(tr, "values", None)
         if labels is not None and values is not None:
             for lab, val in zip(list(labels)[:], list(values)[:]):
-                rows.append({"trace": name, "series": str(ttype), "label": lab, "value": val})
+                rows.append({"trace": str(name), "series": str(ttype), "label": lab, "value": val})
                 if len(rows) >= max_rows:
                     break
             if len(rows) >= max_rows:
@@ -310,79 +314,329 @@ def _fig_to_compact_csv(fig, max_rows: int = 1200) -> str:
         x = getattr(tr, "x", None)
         y = getattr(tr, "y", None)
 
-        # Histogram sometimes has x only; keep x as value
+        # Some traces can carry only x (e.g., histogram when built from samples)
         if x is not None and y is None:
-            for xi in list(x)[:]:
-                rows.append({"trace": name, "series": str(ttype), "x": xi})
+            x_list = list(x) if hasattr(x, "__iter__") and not isinstance(x, (str, bytes)) else [x]
+            for xi in x_list[:]:
+                rows.append({"trace": str(name), "series": str(ttype), "x": xi})
                 if len(rows) >= max_rows:
                     break
             if len(rows) >= max_rows:
                 break
             continue
 
-        if x is None or y is None:
+        if x is None and y is None:
             continue
 
-        # Safely iterate
-        try:
-            xs = list(x)
-            ys = list(y)
-        except Exception:
-            continue
+        x_list = list(x) if hasattr(x, "__iter__") and not isinstance(x, (str, bytes)) else [x]
+        y_list = list(y) if hasattr(y, "__iter__") and not isinstance(y, (str, bytes)) else [y]
 
-        n = min(len(xs), len(ys))
+        n = min(len(x_list), len(y_list))
         for i in range(n):
-            rows.append({"trace": name, "series": str(ttype), "x": xs[i], "y": ys[i]})
+            rows.append({"trace": str(name), "series": str(ttype), "x": x_list[i], "y": y_list[i]})
             if len(rows) >= max_rows:
                 break
         if len(rows) >= max_rows:
             break
 
-    if not rows:
-        return "trace,series\n(no plottable trace data)\n"
-
     dfc = pd.DataFrame(rows)
-    return dfc.to_csv(index=False)
+    if not dfc.empty:
+        dfc = dfc.loc[:, ~dfc.columns.duplicated()]
+    return dfc
+
+
+def _series_stats(values) -> dict:
+    """Robust summary stats for numeric series (used for violin/box/hist aggregation)."""
+    import pandas as pd
+    import numpy as np
+
+    s = pd.to_numeric(pd.Series(list(values)), errors="coerce").dropna()
+    if s.empty:
+        return {"n": 0, "mean": np.nan, "median": np.nan, "p25": np.nan, "p75": np.nan, "min": np.nan, "max": np.nan, "std": np.nan}
+    return {
+        "n": int(len(s)),
+        "mean": float(s.mean()),
+        "median": float(s.median()),
+        "p25": float(s.quantile(0.25)),
+        "p75": float(s.quantile(0.75)),
+        "min": float(s.min()),
+        "max": float(s.max()),
+        "std": float(s.std(ddof=1)) if len(s) > 1 else 0.0,
+    }
+
+
+def _try_parse_datetime(x_list):
+    import pandas as pd
+    if not x_list:
+        return None
+    try:
+        dt = pd.to_datetime(pd.Series(x_list), errors="coerce", utc=False)
+        ok = dt.notna().mean()
+        if ok >= 0.8:
+            return dt
+    except Exception:
+        pass
+    return None
+
+
+def _aggregate_fig_context(fig, max_bins: int = 40) -> "pd.DataFrame":
+    """
+    Produce a smaller, *aggregated* DataFrame representation of a figure, intended
+    specifically for LLM context (avoids payload/token blowups for point-heavy traces).
+    """
+    import pandas as pd
+    import numpy as np
+
+    out_rows = []
+    try:
+        traces = list(fig.data) if hasattr(fig, "data") else []
+    except Exception:
+        traces = []
+
+    for tr in traces:
+        name = (
+            getattr(tr, "name", None)
+            or getattr(tr, "legendgroup", None)
+            or getattr(tr, "type", "trace")
+        )
+        ttype = str(getattr(tr, "type", "") or "")
+
+        # Violin/Box: summarize distribution (prefer splitting by category when possible)
+        if ttype in {"violin", "box"}:
+            x = getattr(tr, "x", None)
+            y = getattr(tr, "y", None)
+
+            # If both x and y exist and x looks categorical, compute per-category stats so
+            # a single-trace violin still yields separate rows (e.g., Owned vs Consigned).
+            try:
+                xs = list(x) if x is not None and hasattr(x, "__iter__") and not isinstance(x, (str, bytes)) else []
+                ys = list(y) if y is not None and hasattr(y, "__iter__") and not isinstance(y, (str, bytes)) else []
+            except Exception:
+                xs, ys = [], []
+
+            if xs and ys and len(xs) == len(ys):
+                try:
+                    tmp = pd.DataFrame({"category": xs, "value": ys})
+                    cats = tmp["category"].dropna().astype(str)
+                    n_unique = int(cats.nunique())
+                    if n_unique > 1 and n_unique <= max_bins:
+                        tmp = tmp.loc[cats.index].copy()
+                        tmp["category"] = cats.values
+                        for cat, sub in tmp.groupby("category", sort=False):
+                            stats = _series_stats(sub["value"].tolist())
+                            out_rows.append({"trace": str(name), "series": ttype, "group": str(cat), **stats})
+                        continue
+                except Exception:
+                    # Fall through to whole-trace aggregation
+                    pass
+
+            # Fallback: stats for the whole trace
+            vals = y if y is not None else x
+            vals_list = (
+                list(vals)
+                if vals is not None and hasattr(vals, "__iter__") and not isinstance(vals, (str, bytes))
+                else []
+            )
+            stats = _series_stats(vals_list)
+            out_rows.append({"trace": str(name), "series": ttype, **stats})
+            continue
+
+        # Pie-like traces (already aggregated)
+        labels = getattr(tr, "labels", None)
+        values = getattr(tr, "values", None)
+        if labels is not None and values is not None:
+            for lab, val in zip(list(labels)[:max_bins], list(values)[:max_bins]):
+                out_rows.append({"trace": str(name), "series": ttype or "pie", "label": lab, "value": val})
+            continue
+
+        # x/y traces
+        x = getattr(tr, "x", None)
+        y = getattr(tr, "y", None)
+
+        # Histogram-like (x only samples)
+        if (ttype == "histogram") and (x is not None) and (y is None):
+            x_list = list(x) if hasattr(x, "__iter__") and not isinstance(x, (str, bytes)) else []
+            if x_list:
+                s = pd.to_numeric(pd.Series(x_list), errors="coerce").dropna()
+                if not s.empty:
+                    # bin counts
+                    try:
+                        bins = min(max_bins, max(10, int(np.sqrt(len(s)))))
+                        counts, edges = np.histogram(s.values, bins=bins)
+                        for i in range(len(counts)):
+                            out_rows.append({
+                                "trace": str(name),
+                                "series": "histogram",
+                                "bin_start": float(edges[i]),
+                                "bin_end": float(edges[i + 1]),
+                                "count": int(counts[i]),
+                            })
+                    except Exception:
+                        # fallback to summary stats only
+                        stats = _series_stats(s.values)
+                        out_rows.append({"trace": str(name), "series": "histogram_summary", **stats})
+            continue
+
+        if x is None or y is None:
+            continue
+
+        x_list = list(x) if hasattr(x, "__iter__") and not isinstance(x, (str, bytes)) else [x]
+        y_list = list(y) if hasattr(y, "__iter__") and not isinstance(y, (str, bytes)) else [y]
+        n = min(len(x_list), len(y_list))
+        if n == 0:
+            continue
+        x_list = x_list[:n]
+        y_list = y_list[:n]
+
+        # Attempt numeric y
+        y_num = pd.to_numeric(pd.Series(y_list), errors="coerce")
+        if y_num.notna().sum() < max(3, int(0.5 * n)):
+            # Non-numeric or too sparse: fall back to top categories (counts)
+            xs = pd.Series(x_list).astype(str).fillna("Unknown")
+            top = xs.value_counts().head(max_bins)
+            for lab, cnt in top.items():
+                out_rows.append({"trace": str(name), "series": ttype or "xy", "group": lab, "count": int(cnt)})
+            continue
+
+        # If x is datetime-ish, aggregate by week/month depending on span
+        dt = _try_parse_datetime(x_list)
+        if dt is not None:
+            tmp = pd.DataFrame({"dt": dt, "y": y_num}).dropna(subset=["dt", "y"])
+            if tmp.empty:
+                continue
+            span_days = (tmp["dt"].max() - tmp["dt"].min()).days if pd.notna(tmp["dt"].max()) and pd.notna(tmp["dt"].min()) else 0
+            if span_days > 365:
+                period = tmp["dt"].dt.to_period("M").dt.to_timestamp()
+                period_label = "month"
+            elif span_days > 90:
+                period = tmp["dt"].dt.to_period("W").apply(lambda r: r.start_time)
+                period_label = "week"
+            else:
+                period = tmp["dt"].dt.to_period("D").dt.to_timestamp()
+                period_label = "day"
+            tmp["period"] = period
+            g = tmp.groupby("period")["y"].agg(["count", "mean", "median", "min", "max", "sum"]).reset_index()
+            g = g.sort_values("period").head(max_bins)
+            for _, r in g.iterrows():
+                out_rows.append({
+                    "trace": str(name),
+                    "series": ttype or "xy",
+                    "period": r["period"],
+                    "period_grain": period_label,
+                    "n": int(r["count"]),
+                    "y_sum": float(r["sum"]),
+                    "y_mean": float(r["mean"]),
+                    "y_median": float(r["median"]),
+                    "y_min": float(r["min"]),
+                    "y_max": float(r["max"]),
+                })
+            continue
+
+        # Otherwise, aggregate by categorical x (top-k) or numeric bins
+        x_ser = pd.Series(x_list)
+        x_num = pd.to_numeric(x_ser, errors="coerce")
+        if x_num.notna().sum() >= max(3, int(0.5 * n)):
+            tmp = pd.DataFrame({"x": x_num, "y": y_num}).dropna()
+            if tmp.empty:
+                continue
+            try:
+                bins = min(max_bins, max(10, int(np.sqrt(len(tmp)))))
+                tmp["bin"] = pd.cut(tmp["x"], bins=bins, duplicates="drop")
+                g = tmp.groupby("bin")["y"].agg(["count", "mean", "median", "min", "max", "sum"]).reset_index()
+                for _, r in g.head(max_bins).iterrows():
+                    b = r["bin"]
+                    out_rows.append({
+                        "trace": str(name),
+                        "series": ttype or "xy",
+                        "bin_start": float(getattr(b, "left", np.nan)),
+                        "bin_end": float(getattr(b, "right", np.nan)),
+                        "n": int(r["count"]),
+                        "y_sum": float(r["sum"]),
+                        "y_mean": float(r["mean"]),
+                        "y_median": float(r["median"]),
+                        "y_min": float(r["min"]),
+                        "y_max": float(r["max"]),
+                    })
+            except Exception:
+                stats = _series_stats(tmp["y"].values)
+                out_rows.append({"trace": str(name), "series": (ttype or "xy") + "_summary", **stats})
+        else:
+            tmp = pd.DataFrame({"x": x_ser.astype(str).fillna("Unknown"), "y": y_num}).dropna(subset=["y"])
+            if tmp.empty:
+                continue
+            g = (
+                tmp.groupby("x")["y"]
+                .agg(["count", "mean", "median", "min", "max", "sum"])
+                .reset_index()
+                .rename(columns={"x": "group"})
+                .sort_values("sum", ascending=False)
+                .head(max_bins)
+            )
+            for _, r in g.iterrows():
+                out_rows.append({
+                    "trace": str(name),
+                    "series": ttype or "xy",
+                    "group": r["group"],
+                    "n": int(r["count"]),
+                    "y_sum": float(r["sum"]),
+                    "y_mean": float(r["mean"]),
+                    "y_median": float(r["median"]),
+                    "y_min": float(r["min"]),
+                    "y_max": float(r["max"]),
+                })
+
+    df_out = pd.DataFrame(out_rows)
+    if not df_out.empty:
+        df_out = df_out.loc[:, ~df_out.columns.duplicated()]
+    return df_out
+
+
+def _compact_context_for_fig(fig, max_rows: int = 1200, max_chars: int = 120000):
+    """
+    Returns (context_df, meta) where context_df is what we will send to Groq.
+    If the raw compact CSV is still too large, we auto-aggregate the plotted values
+    into a much smaller summary table (especially important for violin/box/point-heavy charts).
+    """
+    import pandas as pd
+
+    # Prefer aggregation for distribution traces (violin/box), even if raw would fit
+    try:
+        trace_types = {str(getattr(t, "type", "") or "") for t in (list(fig.data) if hasattr(fig, "data") else [])}
+    except Exception:
+        trace_types = set()
+
+    force_agg = bool(trace_types & {"violin", "box"})
+    raw_df = _fig_to_compact_df(fig, max_rows=max_rows)
+    raw_csv = raw_df.to_csv(index=False) if isinstance(raw_df, pd.DataFrame) else ""
+
+    if (not force_agg) and (len(raw_csv) <= max_chars) and (len(raw_df) <= max_rows):
+        return raw_df, {"source": "chart", "mode": "raw", "note": ""}
+
+    agg_df = _aggregate_fig_context(fig, max_bins=40)
+
+    # If aggregation still produced nothing (rare), fall back to whatever raw we had
+    if agg_df is None or getattr(agg_df, "empty", True):
+        return raw_df, {"source": "chart", "mode": "raw", "note": "(fallback) raw chart values"}
+
+    agg_csv = agg_df.to_csv(index=False)
+    if len(agg_csv) > max_chars:
+        # Hard cap rows as a last resort
+        agg_df = agg_df.head(250).copy()
+
+    note = "Auto-aggregated chart values to avoid large payloads (common for violin/box or dense point charts)."
+    return agg_df, {"source": "chart", "mode": "auto-aggregated", "note": note}
+
+
+def _fig_to_compact_csv(fig, max_rows: int = 1200) -> str:
+    """Backward-compatible wrapper (returns CSV)."""
+    import pandas as pd
+    dfc, _meta = _compact_context_for_fig(fig, max_rows=max_rows)
+    if isinstance(dfc, pd.DataFrame):
+        return dfc.to_csv(index=False)
+    return ""
 
 
 # --- Capture charts rendered on the current page ---
-
-
-def _df_to_compact_csv(df: "pd.DataFrame", max_rows: int = 1200, max_cols: int = 40, max_chars: int = 120000) -> str:
-    """Build a compact CSV from a DataFrame for Groq context, with hard caps to avoid payload errors."""
-    import pandas as pd
-    if df is None or not isinstance(df, pd.DataFrame) or df.empty:
-        return "note\n(no table data)"
-    out = df.copy()
-
-    # Limit columns first (keep leftmost columns which usually hold identifiers)
-    if out.shape[1] > max_cols:
-        out = out.iloc[:, :max_cols]
-
-    # Limit rows
-    if len(out) > max_rows:
-        out = out.head(max_rows)
-
-    # Convert to CSV and cap overall characters (bytes/token safety)
-    csv = out.to_csv(index=False)
-    if len(csv) <= max_chars:
-        return csv
-
-    # If still too large, progressively reduce rows until within cap
-    # (fast path: scale rows proportionally)
-    try:
-        ratio = max_chars / max(len(csv), 1)
-        new_rows = max(10, int(len(out) * ratio))
-    except Exception:
-        new_rows = max(10, int(len(out) * 0.5))
-
-    out2 = out.head(new_rows)
-    csv2 = out2.to_csv(index=False)
-    while len(csv2) > max_chars and len(out2) > 10:
-        out2 = out2.head(max(10, int(len(out2) * 0.7)))
-        csv2 = out2.to_csv(index=False)
-
-    return csv2
 # Reset each rerun so the chart picker only shows charts rendered *this run* (i.e., on the current page).
 st.session_state["_ai_figs"] = []
 
@@ -400,10 +654,13 @@ if not getattr(st.plotly_chart, "__ai_capture__", False):
     _plotly_chart_capture.__ai_capture__ = True
     st.plotly_chart = _plotly_chart_capture
 
+
+
+
+# --- Capture tables rendered on the current page (Stats page only) ---
 # Reset each rerun so the table picker only shows tables rendered *this run* (primarily used on the Stats page).
 st.session_state["_ai_tables"] = []
 
-# Monkeypatch st.dataframe and st.table ONCE (avoid wrapper stacking across reruns)
 def _maybe_capture_table(data):
     """Capture DataFrames shown on-screen for Groq context (Stats page only)."""
     try:
@@ -411,19 +668,20 @@ def _maybe_capture_table(data):
         if st.session_state.get("_current_page") != "Stats":
             return
         import pandas as _pd
-        df = None
+        dfc = None
         if isinstance(data, _pd.DataFrame):
-            df = data
+            dfc = data
         else:
-            # Support for Styler or other wrappers that expose a .data attribute
-            _d = getattr(data, "data", None)
-            if isinstance(_d, _pd.DataFrame):
-                df = _d
-        if df is not None:
-            st.session_state["_ai_tables"].append(df)
+            # Support for Styler or wrappers exposing `.data`
+            d = getattr(data, "data", None)
+            if isinstance(d, _pd.DataFrame):
+                dfc = d
+        if dfc is not None:
+            st.session_state["_ai_tables"].append(dfc)
     except Exception:
         pass
 
+# Monkeypatch st.dataframe and st.table ONCE (avoid wrapper stacking across reruns)
 if not getattr(st.dataframe, "__ai_capture__", False):
     _ORIG_ST_DATAFRAME = st.dataframe
     def _dataframe_capture(data=None, *args, **kwargs):
@@ -439,7 +697,6 @@ if not getattr(st.table, "__ai_capture__", False):
         return _ORIG_ST_TABLE(data, *args, **kwargs)
     _table_capture.__ai_capture__ = True
     st.table = _table_capture
-
 
 
 
@@ -904,10 +1161,11 @@ _main_pages = [
     "All Data",
 ]
 page = st.sidebar.radio("Navigate", _main_pages, index=0, key="nav_main")
-st.session_state["_current_page"] = page  # used by AI capture wrappers
-st.session_state["_ai_tables"] = []  # reset captured tables each rerun
+st.session_state["_current_page"] = page  # used for Stats table capture gating
+st.session_state["_ai_tables"] = []  # reset captured tables each rerun (Stats only)
 st.session_state["_ai_figs"] = []  # reset captured charts each rerun
 st.session_state["_ai_override_df"] = {}  # per-figure data overrides (reset each rerun)
+st.session_state["_ai_override_meta"] = {}  # per-figure override metadata (reset each rerun)
 st.sidebar.markdown("---")
 
 
@@ -3153,6 +3411,7 @@ if page == 'Geography & Channels':
                     .rename(columns={"#": "Rank"})
                 )
                 st.session_state.setdefault("_ai_override_df", {})[id(fig)] = _ai_tbl
+                st.session_state.setdefault("_ai_override_meta", {})[id(fig)] = {"source": "table", "mode": "table-override", "note": "Using the Top markets table below the map as Groq context."}
             except Exception:
                 pass
 
@@ -6690,47 +6949,108 @@ if page == 'All Data':
 # Groq AI Q&A Panel (Page-wide)
 # -----------------------------
 st.markdown("---")
-with st.expander("🤖 Ask AI about the chart on this page (Groq)", expanded=False):
+with st.expander("🤖 Ask AI about what’s shown on this page (Groq)", expanded=False):
     with st.expander("What this AI tool can’t do (limitations)", expanded=False):
         st.markdown(
-            """- The AI **only** sees the compact CSV shown below (derived from the current chart’s data, or a linked table override).
-- It **cannot “see” the rendered graphics** (colors, shapes, map shading, annotations, layout) unless those values are explicitly present in the CSV.
-- If a visual is not a Plotly chart (e.g., images, custom HTML, screenshots) or the chart doesn’t expose point values, the AI may have **little/no usable data**.
-- It does **not** have access to your full dataset or filters beyond what’s included in the compact CSV.
+            """- The AI **only** sees the compact table/CSV shown below (derived from what’s displayed on-screen).
+- It **cannot “see” the rendered graphics** (colors, shapes, map geometry, layout) unless those values are explicitly present in the data sent.
+- Some visuals don’t expose point values (or are not Plotly charts/tables); in those cases the AI may have **little/no usable data**.
+- For “dense” charts (e.g., violin/box/scatter with many points), the app **auto-aggregates** data before sending to avoid payload limits.
+- It does **not** have access to your full dataset beyond the compact context shown here.
 - Treat outputs as **analysis help**, not authoritative advice—double-check before making operational/compliance decisions."""
         )
 
-    
     current_page = st.session_state.get("_current_page") or (page if "page" in globals() else None)
-    # Defaults so the panel never crashes when a page has no tables/charts yet
-    ask_groq = False
-    user_q = ""
-    context_csv = ""
-    item_desc = ""
 
+    def _compact_context_for_df(df: pd.DataFrame, max_rows: int = 1200, max_chars: int = 120000):
+        """Return (df_out, meta) ensuring the CSV stays within row/char limits."""
+        meta = {"source": "stats-table", "mode": "table", "note": ""}
+        try:
+            if not isinstance(df, pd.DataFrame) or df.empty:
+                return pd.DataFrame(), {**meta, "mode": "empty", "note": "No table data available."}
 
-    # On the Stats page, use the visible tables as the AI context (instead of Plotly charts)
+            out = df.copy()
+
+            # Cap very wide tables
+            if out.shape[1] > 40:
+                out = out.iloc[:, :40]
+                meta["note"] = "Table was very wide; truncated to first 40 columns for AI context."
+
+            # Cap rows
+            if len(out) > max_rows:
+                out = out.head(max_rows)
+                meta["mode"] = "head"
+                meta["note"] = (meta["note"] + " " if meta["note"] else "") + f"Truncated to first {max_rows} rows."
+
+            # Cap by serialized size (chars)
+            csv = out.to_csv(index=False)
+            if len(csv) > max_chars:
+                # progressively shrink rows
+                for r in (800, 500, 300, 200, 100):
+                    if len(out) <= r:
+                        continue
+                    tmp = out.head(r)
+                    if len(tmp.to_csv(index=False)) <= max_chars:
+                        out = tmp
+                        meta["mode"] = f"head-{r}"
+                        meta["note"] = (meta["note"] + " " if meta["note"] else "") + f"Reduced further to {r} rows to fit payload."
+                        break
+                else:
+                    # last resort: sample 100 rows
+                    out = out.sample(min(100, len(out)), random_state=7)
+                    meta["mode"] = "sample-100"
+                    meta["note"] = (meta["note"] + " " if meta["note"] else "") + "Sampled 100 rows to fit payload."
+            return out, meta
+        except Exception:
+            return pd.DataFrame(), {**meta, "mode": "error", "note": "Failed to compact table for AI context."}
+
+    def _describe_fig(fig) -> str:
+        try:
+            title = str(getattr(fig.layout.title, "text", "") or "").strip()
+        except Exception:
+            title = ""
+        try:
+            xlab = str(getattr(fig.layout.xaxis.title, "text", "") or "").strip()
+        except Exception:
+            xlab = ""
+        try:
+            ylab = str(getattr(fig.layout.yaxis.title, "text", "") or "").strip()
+        except Exception:
+            ylab = ""
+        parts = []
+        if title:
+            parts.append(f"- Title: {title}")
+        if xlab:
+            parts.append(f"- x-axis: {xlab}")
+        if ylab:
+            parts.append(f"- y-axis: {ylab}")
+        if not parts:
+            parts.append("- (No title/axis labels detected)")
+        return "\n".join(parts)
+
+    # -----------------------------
+    # Stats page: pick from visible tables
+    # -----------------------------
     if current_page == "Stats":
         tables = st.session_state.get("_ai_tables", []) or []
-
-        # De-dupe within this run (defensive)
+        # de-dupe within this run (defensive)
         _seen = set()
         _uniq_tables = []
-        for _t in tables:
-            _tid = id(_t)
-            if _tid in _seen:
+        for t in tables:
+            tid = id(t)
+            if tid in _seen:
                 continue
-            _seen.add(_tid)
-            _uniq_tables.append(_t)
+            _seen.add(tid)
+            _uniq_tables.append(t)
         tables = _uniq_tables
 
         if not tables:
-            st.info("No tables detected on this page yet. Scroll to a table in the Stats page to enable AI Q&A.")
+            st.info("No tables detected on the Stats page yet. Scroll to the Stats tab sections where tables are displayed.")
         else:
-            def _table_label(df, i, used=None):
+            def _table_label(df: pd.DataFrame, idx: int, used=None) -> str:
                 used = used or set()
                 cols = [str(c) for c in list(df.columns)[:4]]
-                base = f"Table {i+1}: " + (", ".join(cols) if cols else "Data")
+                base = f"Table {idx+1}: " + (", ".join(cols) if cols else "Data")
                 label = base
                 k = 2
                 while label in used:
@@ -6739,135 +7059,47 @@ with st.expander("🤖 Ask AI about the chart on this page (Groq)", expanded=Fal
                 used.add(label)
                 return label
 
-            _tlabels, _used = [], set()
+            _labels, _used = [], set()
             for i, dfi in enumerate(tables):
-                _tlabels.append(_table_label(dfi, i, used=_used))
+                _labels.append(_table_label(dfi, i, used=_used))
 
-            pick = st.selectbox(
-                "Pick a table (Stats page)",
-                options=list(range(len(tables))),
-                format_func=lambda i: _tlabels[i],
-                key="groq_table_pick",
-            )
+            pick = st.selectbox("Pick a table (Stats page)", _labels, index=0, key="groq_pick_stats_table")
+            sel_df = tables[_labels.index(pick)] if pick in _labels else tables[0]
 
-            with st.form("groq_qa_form", clear_on_submit=False):
+            # Build compact context from selected table
+            context_df, _m = _compact_context_for_df(sel_df, max_rows=1200, max_chars=120000)
+            context_csv = context_df.to_csv(index=False) if isinstance(context_df, pd.DataFrame) else ""
+            chart_desc = "This is a table displayed on the **Stats** page.\n" + f"- Rows shown: {len(sel_df):,}\n- Columns: " + ", ".join([str(c) for c in list(sel_df.columns)[:12]]) + ("..." if len(sel_df.columns) > 12 else "")
+
+            with st.expander("Show compact CSV sent to Groq", expanded=False):
+                st.caption(f"Context source: **stats-table** | Mode: **{_m.get('mode','table')}**")
+                if _m.get("note"):
+                    st.caption(_m["note"])
+                if isinstance(context_df, pd.DataFrame) and not context_df.empty:
+                    st.caption(f"Rows: {len(context_df):,} | Columns: {len(context_df.columns):,}")
+                    st.dataframe(context_df, use_container_width=True, height=320)
+                else:
+                    st.write("(No table data captured.)")
+
+            with st.form("groq_qa_form_stats", clear_on_submit=False):
                 user_q = st.text_input(
-                    "Question for the AI",
-                    key="groq_user_question",
-                    placeholder="e.g. Which category is highest and by how much? Any outliers?",
+                    "Ask a question about the selected Stats table",
+                    key="groq_user_question_stats",
+                    placeholder="e.g. Which category contributes the most, and how concentrated is it?",
                 )
                 st.caption("Tip: Press Enter to submit.")
                 ask_groq = st.form_submit_button("Ask Groq")
 
-            sel_df = tables[pick]
-            context_csv = _df_to_compact_csv(sel_df, max_rows=1200)
-            _context_source = "stats-table"
-            item_desc = f"TABLE: {_tlabels[pick]}"
+            if ask_groq:
+                if not user_q.strip():
+                    st.info("Please enter a question before asking the AI.")
+                elif not groq_api_key:
+                    st.error("Please paste your Groq API key in the sidebar first.")
+                else:
+                    prompt = f"""You are a data analyst interpreting a dashboard table.
 
-            with st.expander("Show compact CSV sent to Groq", expanded=False):
-                st.caption(f"Context source: **{_context_source}** (captured from the visible Stats tables).")
-                try:
-                    import io as _io
-                    _csv_df = pd.read_csv(_io.StringIO(context_csv))
-                    st.caption(f"Rows: {len(_csv_df):,} | Columns: {len(_csv_df.columns):,}")
-                    st.dataframe(_csv_df, use_container_width=True, height=320)
-                except Exception:
-                    lines = context_csv.splitlines()
-                    preview_n = min(len(lines), 220)
-                    st.code("\n".join(lines[:preview_n]), language="csv")
-
-                st.download_button(
-                    "Download compact CSV",
-                    data=context_csv.encode("utf-8"),
-                    file_name="groq_table_context.csv",
-                    mime="text/csv",
-                    key="dl_groq_context_csv",
-                )
-
-    else:
-        figs = st.session_state.get("_ai_figs", []) or []
-        # De-dupe within this run (defensive; should usually be unnecessary)
-        _seen_ids = set()
-        _uniq = []
-        for _f in figs:
-            _fid = id(_f)
-            if _fid in _seen_ids:
-                continue
-            _seen_ids.add(_fid)
-            _uniq.append(_f)
-        figs = _uniq
-
-        if not figs:
-            st.info("No Plotly charts detected on this page yet. Navigate to a page with charts to enable AI Q&A.")
-        else:
-            labels = []
-            _used_labels = set()
-            for i, fig in enumerate(figs):
-                labels.append(_figure_label(fig, i, used=_used_labels))
-
-            pick = st.selectbox(
-                "Pick a chart",
-                options=list(range(len(figs))),
-                format_func=lambda i: labels[i],
-                key="groq_chart_pick",
-            )
-
-            with st.form("groq_qa_form", clear_on_submit=False):
-                user_q = st.text_input(
-                    "Question for the AI",
-                    key="groq_user_question",
-                    placeholder="e.g. What trend stands out? Are there outliers or differences between categories?",
-                )
-                st.caption("Tip: Press Enter to submit.")
-                ask_groq = st.form_submit_button("Ask Groq")
-
-            sel_fig = figs[pick]
-            _override = (st.session_state.get("_ai_override_df") or {}).get(id(sel_fig))
-            if isinstance(_override, pd.DataFrame) and not _override.empty:
-                context_csv = _df_to_compact_csv(_override, max_rows=1200)
-                _context_source = "table"
-            else:
-                context_csv = _fig_to_compact_csv(sel_fig, max_rows=1200)
-                _context_source = "chart"
-            item_desc = f"CHART: {_figure_label(sel_fig, pick)}"
-
-            with st.expander("Show compact CSV sent to Groq", expanded=False):
-                st.caption(f"Context source: **{_context_source}** (table override used when available).")
-                try:
-                    import io as _io
-                    _csv_df = pd.read_csv(_io.StringIO(context_csv))
-                    st.caption(f"Rows: {len(_csv_df):,} | Columns: {len(_csv_df.columns):,}")
-                    st.dataframe(_csv_df, use_container_width=True, height=320)
-                except Exception as _e:
-                    lines = context_csv.splitlines()
-                    preview_n = min(len(lines), 220)
-                    st.caption(
-                        f"Couldn't render as a table (showing CSV text instead). "
-                        f"Showing {preview_n:,} of {len(lines):,} lines."
-                    )
-                    st.code("\n".join(lines[:preview_n]), language="csv")
-
-                st.download_button(
-                    "Download compact CSV",
-                    data=context_csv.encode("utf-8"),
-                    file_name="groq_chart_context.csv",
-                    mime="text/csv",
-                    key="dl_groq_context_csv",
-                )
-
-    if ask_groq:
-        if not user_q.strip():
-            st.info("Please enter a question before asking the AI.")
-        elif not st.session_state.get("groq_api_key"):
-            st.error("Please paste your Groq API key in the sidebar first.")
-        elif not str(context_csv).strip():
-            st.error("No data context is available for the selected item.")
-        else:
-            prompt = f"""
-You are a careful, concise data analyst interpreting an item from an ammolite sales dashboard.
-
-CONTEXT ITEM:
-{item_desc}
+ITEM CONTEXT:
+{chart_desc}
 
 DATA (COMPACT CSV) USED FOR THIS ITEM:
 {context_csv}
@@ -6882,15 +7114,119 @@ INSTRUCTIONS:
 - Keep it under ~180 words unless the question truly needs more nuance.
 - Do NOT mention models/APIs. Focus on what the data implies.
 """
-            try:
-                ans = _groq_chat_completion(
-                    api_key=st.session_state.get("groq_api_key"),
-                    prompt=prompt,
-                    model="llama-3.3-70b-versatile",
-                    max_completion_tokens=350,
-                    temperature=0.3,
+                    try:
+                        answer = _groq_chat_completion(
+                            api_key=groq_api_key,
+                            prompt=prompt,
+                            model="llama-3.3-70b-versatile",
+                            max_completion_tokens=300,
+                            temperature=0.3,
+                        )
+                        st.markdown("**Groq Insight:**")
+                        st.write(answer)
+                    except Exception as e:
+                        st.error(f"Error calling Groq: {e}")
+
+    # -----------------------------
+    # All other pages: pick from visible Plotly charts
+    # -----------------------------
+    else:
+        figs = st.session_state.get("_ai_figs", []) or []
+        # De-dupe within this run (defensive)
+        _seen_ids = set()
+        _uniq = []
+        for _f in figs:
+            _fid = id(_f)
+            if _fid in _seen_ids:
+                continue
+            _seen_ids.add(_fid)
+            _uniq.append(_f)
+        figs = _uniq
+
+        if not figs:
+            st.info("No Plotly charts detected on this page yet. Navigate to a page with charts to enable AI Q&A.")
+        else:
+            labels = []
+            used = set()
+            for i, fig in enumerate(figs):
+                labels.append(_figure_label(fig, i, used=used))
+
+            pick = st.selectbox("Pick a chart", labels, index=0, key="groq_pick_chart")
+
+            # Build compact CSV context from selected figure
+            sel_fig = figs[labels.index(pick)] if pick in labels else figs[0]
+
+            # Prefer per-figure override tables (e.g., map → top markets table).
+            _override = (st.session_state.get("_ai_override_df") or {}).get(id(sel_fig))
+            _meta = (st.session_state.get("_ai_override_meta") or {}).get(id(sel_fig)) or {}
+
+            if isinstance(_override, pd.DataFrame) and not _override.empty:
+                context_df = _override.copy()
+                _context_source = _meta.get("source", "table")
+                _context_mode = _meta.get("mode", "table-override")
+                _context_note = _meta.get("note", "")
+            else:
+                context_df, _m = _compact_context_for_fig(sel_fig, max_rows=1200, max_chars=120000)
+                _context_source = _m.get("source", "chart")
+                _context_mode = _m.get("mode", "raw")
+                _context_note = _m.get("note", "")
+
+            context_csv = context_df.to_csv(index=False) if isinstance(context_df, pd.DataFrame) else ""
+            chart_desc = _describe_fig(sel_fig)
+
+            with st.expander("Show compact CSV sent to Groq", expanded=False):
+                st.caption(f"Context source: **{_context_source}** | Mode: **{_context_mode}**")
+                if _context_note:
+                    st.caption(_context_note)
+
+                if isinstance(context_df, pd.DataFrame) and not context_df.empty:
+                    st.caption(f"Rows: {len(context_df):,} | Columns: {len(context_df.columns):,}")
+                    st.dataframe(context_df, use_container_width=True, height=320)
+                else:
+                    st.write("(No plottable trace data captured for this chart.)")
+
+            with st.form("groq_qa_form_chart", clear_on_submit=False):
+                user_q = st.text_input(
+                    "Ask a question about the selected chart",
+                    key="groq_user_question",
+                    placeholder="e.g. What trend stands out? Are there outliers or differences between categories?",
                 )
-                st.markdown("**AI Insight (Groq):**")
-                st.write(ans)
-            except Exception as e:
-                st.error(f"Error calling Groq API: {e}")
+                st.caption("Tip: Press Enter to submit.")
+                ask_groq = st.form_submit_button("Ask Groq")
+
+            if ask_groq:
+                if not user_q.strip():
+                    st.info("Please enter a question before asking the AI.")
+                elif not groq_api_key:
+                    st.error("Please paste your Groq API key in the sidebar first.")
+                else:
+                    prompt = f"""You are a data analyst interpreting a chart in an ammolite sales dashboard.
+
+CHART CONTEXT:
+{chart_desc}
+
+DATA (COMPACT CSV) USED FOR THIS CHART:
+{context_csv}
+
+USER QUESTION:
+{user_q}
+
+INSTRUCTIONS:
+- Base your answer ONLY on the CSV data above.
+- Start with 1–2 sentences that directly answer the user's question.
+- Then add up to 5 short bullet points with key patterns (only if useful).
+- Keep it under ~180 words unless the question truly needs more nuance.
+- Do NOT mention models/APIs. Focus on what the data implies.
+"""
+                    try:
+                        answer = _groq_chat_completion(
+                            api_key=groq_api_key,
+                            prompt=prompt,
+                            model="llama-3.3-70b-versatile",
+                            max_completion_tokens=300,
+                            temperature=0.3,
+                        )
+                        st.markdown("**Groq Insight:**")
+                        st.write(answer)
+                    except Exception as e:
+                        st.error(f"Error calling Groq: {e}")
