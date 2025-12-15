@@ -4670,7 +4670,7 @@ if page == 'Seasonality':
 #   Avg Price >= +5% AND Revenue <= -10% AND Volume <= -10%
 # Bubble hover shows Flag Type + Flag Reason ONLY when flagged
 # =========================================================
-    with s1:
+with s1:
     # -----------------------------
     # Title + Help button (same row)
     # -----------------------------
@@ -4680,6 +4680,7 @@ if page == 'Seasonality':
     with t2:
         if st.button("❓ Help", key=pkey("seasonality_help_btn")):
             show_seasonality_help()
+
 
     # -----------------------------
     # Validation
