@@ -6318,10 +6318,16 @@ if page == 'Compliance':
                 .agg(
                     COA_Rate=("Has_Valid_COA", "mean"),
                     Order_Count=(("Sale ID" if "Sale ID" in df7.columns else "Has_Valid_COA"), "count"),
-                )
+                    With_COA_Count=("Has_Valid_COA", "sum"),
+                 )
                 .reset_index()
-                .sort_values("COA_Rate", ascending=False)
-            )
+        )
+
+        agg7["With_COA_Count"] = agg7["With_COA_Count"].astype(int)
+        agg7["No_COA_Count"] = (agg7["Order_Count"] - agg7["With_COA_Count"]).astype(int)
+
+agg7 = agg7.sort_values("COA_Rate", ascending=False)
+
 
             if agg7.empty:
                 st.info("No product types available.")
