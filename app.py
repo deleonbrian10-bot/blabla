@@ -1170,12 +1170,12 @@ groq_api_key = st.sidebar.text_input(
 _main_pages = [
     "Overview",
     "Price Drivers",
+    "Seasonality",
     "Product Mix",
     "Customer Segments",
     "Geography & Channels",
     "Inventory Timing",
     "Ownership",
-    "Seasonality",
     "Compliance",
     "Stats",
     "All Data",
