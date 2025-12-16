@@ -662,7 +662,7 @@ if not getattr(st.plotly_chart, "__ai_capture__", False):
                 except Exception:
                     t = None
                 # If multi-line title, reserve a bit more space
-                min_t = 120 if "<br" in str(title_text) else 95
+                min_t = 150 if "<br" in str(title_text) else 120
                 if t is None or t < min_t:
                     fig.update_layout(margin=dict(t=min_t))
         except Exception:
@@ -948,7 +948,7 @@ def style_fig(fig, height=430):
     # ✅ White chart background + black text + FIXED hoverlabel (no ValueError)
     fig.update_layout(
         height=height,
-        margin=dict(l=10, r=10, t=105, b=40),
+        margin=dict(l=10, r=10, t=125, b=40),
         paper_bgcolor="#FFFFFF",
         plot_bgcolor="#FFFFFF",
         title=dict(automargin=True, pad=dict(b=18)),
@@ -1170,12 +1170,12 @@ groq_api_key = st.sidebar.text_input(
 _main_pages = [
     "Overview",
     "Price Drivers",
-    "Seasonality",
     "Product Mix",
     "Customer Segments",
     "Geography & Channels",
     "Inventory Timing",
     "Ownership",
+    "Seasonality",
     "Compliance",
     "Stats",
     "All Data",
@@ -1655,7 +1655,7 @@ if page == 'Price Drivers':
                     color="Dominant Color",
                     title="Total Revenue by Dominant Color",
                 )
-                fig1.update_layout(showlegend= False, xaxis_title="Dominant Color", yaxis_title="Total Sales Value (CAD)",margin=dict(t=80))
+                fig1.update_layout(showlegend= False, xaxis_title="Dominant Color", yaxis_title="Total Sales Value (CAD)",margin=dict(t=110))
                 fig1.update_yaxes(tickprefix="$", separatethousands=True)
                 fig1.update_xaxes(tickangle=-60)
                 fig1 = style_fig(fig1, height=470)
@@ -6244,7 +6244,7 @@ if page == 'Compliance':
                     color="Market_Type",
                     category_orders={"Compliance_Score_Label": score_order, "Market_Type": market_order},
                     barmode="group",
-                    hover_data=["Order_Count", "With_COA_Count", "No_COA_Count"],
+                    hover_data=["Order_Count"],
                     labels={
                         "Compliance_Score_Label": "Compliance Score",
                         "Avg_Price_CAD": "Average Order Value (CAD)",
