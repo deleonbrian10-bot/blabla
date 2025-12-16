@@ -1170,12 +1170,12 @@ groq_api_key = st.sidebar.text_input(
 _main_pages = [
     "Overview",
     "Price Drivers",
+    "Seasonality",
     "Product Mix",
     "Customer Segments",
     "Geography & Channels",
     "Inventory Timing",
     "Ownership",
-    "Seasonality",
     "Compliance",
     "Stats",
     "All Data",
@@ -6340,6 +6340,21 @@ if page == 'Compliance':
                 )
                 fig7.update_layout(yaxis_tickformat=".0%")
                 fig7 = style_fig(fig7, height=560)
+
+                # Re-apply detailed hover after style_fig (style_fig resets hovertemplate)
+                try:
+                    fig7.update_traces(
+                        customdata=agg7[["Order_Count", "With_COA_Count", "No_COA_Count"]].values,
+                        hovertemplate="<b>%{x}</b><br>"
+                                     "COA Coverage: %{y:.0%}<br>"
+                                     "Total: %{customdata[0]}<br>"
+                                     "With COA: %{customdata[1]}<br>"
+                                     "No COA: %{customdata[2]}<extra></extra>",
+                        selector=dict(type="bar"),
+                    )
+                except Exception:
+                    pass
+
                 st.plotly_chart(fig7, use_container_width=True, key=pkey("comp_coverage_pt"))
 
         # DIR expander
