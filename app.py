@@ -2012,7 +2012,6 @@ if page == 'Price Drivers':
 # TAB: PRODUCT MIX ✅ (ONLY shows inside Product Mix tab)
 # ======================
 if page == 'Product Mix':
-    with tab_mix:
     st.header(" Product Mix")
 
     # ✅ FIX: Directly use the filtered dataframe 'f' from master dashboard
