@@ -655,14 +655,14 @@ if not getattr(st.plotly_chart, "__ai_capture__", False):
         try:
             title_text = getattr(getattr(getattr(fig, "layout", None), "title", None), "text", None)
             if title_text:
-                fig.update_layout(title=dict(automargin=True))
+                fig.update_layout(title=dict(automargin=True, pad=dict(b=18), y=0.98, yanchor="top"))
                 t = None
                 try:
                     t = fig.layout.margin.t
                 except Exception:
                     t = None
                 # If multi-line title, reserve a bit more space
-                min_t = 90 if "<br" in str(title_text) else 70
+                min_t = 120 if "<br" in str(title_text) else 95
                 if t is None or t < min_t:
                     fig.update_layout(margin=dict(t=min_t))
         except Exception:
@@ -948,10 +948,10 @@ def style_fig(fig, height=430):
     # ✅ White chart background + black text + FIXED hoverlabel (no ValueError)
     fig.update_layout(
         height=height,
-        margin=dict(l=10, r=10, t=80, b=40),
+        margin=dict(l=10, r=10, t=105, b=40),
         paper_bgcolor="#FFFFFF",
         plot_bgcolor="#FFFFFF",
-        title=dict(automargin=True),
+        title=dict(automargin=True, pad=dict(b=18)),
         font=dict(family="SpaceGrotesk", size=12, color="#000000"),
         legend=dict(
             font=dict(size=11, family="SpaceGrotesk", color="#000000"),
@@ -6244,7 +6244,7 @@ if page == 'Compliance':
                     color="Market_Type",
                     category_orders={"Compliance_Score_Label": score_order, "Market_Type": market_order},
                     barmode="group",
-                    hover_data=["Order_Count"],
+                    hover_data=["Order_Count", "With_COA_Count", "No_COA_Count"],
                     labels={
                         "Compliance_Score_Label": "Compliance Score",
                         "Avg_Price_CAD": "Average Order Value (CAD)",
@@ -6319,15 +6319,12 @@ if page == 'Compliance':
                     COA_Rate=("Has_Valid_COA", "mean"),
                     Order_Count=(("Sale ID" if "Sale ID" in df7.columns else "Has_Valid_COA"), "count"),
                     With_COA_Count=("Has_Valid_COA", "sum"),
-                 )
+                )
                 .reset_index()
-        )
-
-        agg7["With_COA_Count"] = agg7["With_COA_Count"].astype(int)
-        agg7["No_COA_Count"] = (agg7["Order_Count"] - agg7["With_COA_Count"]).astype(int)
-
-agg7 = agg7.sort_values("COA_Rate", ascending=False)
-
+            )
+            agg7["With_COA_Count"] = agg7["With_COA_Count"].astype(int)
+            agg7["No_COA_Count"] = (agg7["Order_Count"] - agg7["With_COA_Count"]).astype(int)
+            agg7 = agg7.sort_values("COA_Rate", ascending=False)
 
             if agg7.empty:
                 st.info("No product types available.")
@@ -6336,7 +6333,7 @@ agg7 = agg7.sort_values("COA_Rate", ascending=False)
                     agg7,
                     x="Product Type",
                     y="COA_Rate",
-                    hover_data=["Order_Count"],
+                    hover_data=["Order_Count", "With_COA_Count", "No_COA_Count"],
                     text_auto=".0%",
                     title="COA Coverage Rate by Product Type",
                     labels={"COA_Rate": "COA Coverage Rate"},
