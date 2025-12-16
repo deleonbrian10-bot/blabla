@@ -2008,11 +2008,13 @@ if page == 'Price Drivers':
     
                 st.divider()
 
+                
+
 # ======================
 # TAB: PRODUCT MIX ✅ (ONLY shows inside Product Mix tab)
 # ======================
 if page == 'Product Mix':
-    st.header(" Product Mix")
+    st.header("Product Mix")
 
     # ✅ FIX: Directly use the filtered dataframe 'f' from master dashboard
     # This ensures sidebar filters work properly
@@ -2070,66 +2072,23 @@ if page == 'Product Mix':
     # TAB 1: OVERVIEW (NO CHARTS - removed as requested)
     # =====================================================
     with pm_tabs[0]:
-        st.subheader("Executive Summary")
-
-        col1, col2, col3, col4 = st.columns(4)
-
+        # Calculate key metrics for use throughout the tab
         total_rev = pm_df["Price (CAD)"].sum()
         total_sales = len(pm_df)
         avg_txn = pm_df["Price (CAD)"].mean() if total_sales else 0
         mean_price = pm_df["Price (CAD)"].mean() if total_sales else 0
         mean_disc = pm_df["Discount (CAD)"].mean() if total_sales else 0
         avg_disc = (mean_disc / mean_price * 100) if mean_price else 0
-
-        with col1:
-            st.metric("Total Revenue", f"${total_rev:,.0f}", "CAD")
-        with col2:
-            st.metric("Total Sales", f"{total_sales:,}", "transactions")
-        with col3:
-            st.metric("Avg Transaction", f"${avg_txn:,.2f}")
-        with col4:
-            st.metric("Avg Discount", f"{avg_disc:.2f}%", "Strong pricing")
-
-        st.markdown("---")
-
-        # DYNAMIC KEY FINDINGS
-        st.subheader("Key Findings")
-        st.markdown('<div class="insight-box">', unsafe_allow_html=True)
         
-        # Determine pricing assessment (DYNAMIC)
+        # Determine pricing assessment for Business Takeaways section
         if avg_disc < 1:
             pricing_assessment = "exceptionally low"
-            pricing_quality = "exceptional"
         elif avg_disc < 2:
             pricing_assessment = "very low"
-            pricing_quality = "strong"
         elif avg_disc < 3:
             pricing_assessment = "low"
-            pricing_quality = "good"
         else:
             pricing_assessment = "moderate"
-            pricing_quality = "developing"
-        
-        # Determine market tier (DYNAMIC)
-        if avg_txn > 5000:
-            market_tier = "ultra-premium"
-        elif avg_txn > 2000:
-            market_tier = "premium"
-        elif avg_txn > 1000:
-            market_tier = "mid-tier premium"
-        else:
-            market_tier = "accessible"
-        
-        st.markdown(
-            f"""
-            Total revenue of **${total_rev:,.0f} CAD** across **{total_sales:,} transactions**
-            with an average of **${avg_txn:,.2f}** per sale. The {pricing_assessment} discount rate of 
-            **{avg_disc:.2f}%** (vs. 5-15% industry average) demonstrates {pricing_quality} brand value and 
-            pricing power, positioning the business in the **{market_tier} market segment**.
-            """,
-            unsafe_allow_html=True
-        )
-        st.markdown("</div>", unsafe_allow_html=True)
 
         # Top/Bottom product stats
         product_stats = (
@@ -2235,6 +2194,7 @@ if page == 'Product Mix':
         )
         fig_treemap.update_layout(height=700, font=dict(size=14))
         fig_treemap.update_traces(
+            textinfo="label+value+percent parent",
             textfont_size=12,
             marker=dict(line=dict(width=2, color="white"))
         )
@@ -2272,17 +2232,26 @@ if page == 'Product Mix':
         grade_revenue["Percentage"] = ((grade_revenue["Revenue"] / total_grade_rev) * 100).round(1) if total_grade_rev else 0
         grade_revenue = grade_revenue.sort_values("Revenue", ascending=False)
 
+        # Create dynamic title based on filters
+        title_parts = ["Total Revenue by Grade"]
+        if sel_prod:
+            title_parts.append(f"Product Type: {', '.join(sel_prod)}")
+        if sel_grade:
+            title_parts.append(f"Grade: {', '.join(sel_grade)}")
+        
+        chart_title = " | ".join(title_parts)
+
         # ✅ ORIGINAL COLORS: Viridis
         fig_grade = px.bar(
             grade_revenue,
             x="Grade",
             y="Revenue",
-            title="Total Revenue by Grade",
-            text="Percentage",
+            title=chart_title,
+            text="Revenue",
             color="Revenue",
             color_continuous_scale='Viridis',  # ✅ ORIGINAL COLOR
         )
-        fig_grade.update_traces(texttemplate="%{text:.1f}%", textposition="outside")
+        fig_grade.update_traces(texttemplate="$%{text:,.0f}", textposition="outside")
         fig_grade.update_layout(height=500, xaxis_title="Grade", yaxis_title="Revenue (CAD)", showlegend=False)
         st.plotly_chart(fig_grade, use_container_width=True, key=pkey("pm_grade"))
 
@@ -2693,6 +2662,9 @@ if page == 'Product Mix':
             unsafe_allow_html=True,
         )
         st.markdown("</div>", unsafe_allow_html=True)
+
+
+        
 
 # -----------------------------
 # TAB: Customer Segments (RFM added)
